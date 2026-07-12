@@ -98,6 +98,8 @@ fn main() -> Result<(), Box<dyn Error>> {
         std::process::exit(1);
     }
 
+    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("default")).init();
+
     let input_ll = &args[1];
     let output_txt = &args[2];
 

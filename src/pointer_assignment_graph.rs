@@ -25,6 +25,12 @@ pub enum PANodeKind<'m> {
         allocated_type: &'m TypeRef,
     },
 
+    FieldObject {
+        base: PANodeId,
+        field: Vec<u64>,
+        field_type: Option<llvm_ir::TypeRef>,
+    },
+
     FormalParameter {
         function: &'m str,
         index: usize,
@@ -60,6 +66,11 @@ pub enum PANodeKind<'m> {
         name: String,
     },
 
+    /// intermediate var
+    GlobalAddress {
+        name: String,
+    },
+
     /// a global object that is part of a table (e.g., a vtable or a function pointer table)
     TableSlot {
         global: String,
@@ -71,15 +82,19 @@ pub enum PANodeKind<'m> {
 pub struct PANode<'m> {
     pub id: PANodeId,
     pub kind: PANodeKind<'m>,
+    /// LLVM type of the value/object represented by this node, if known.
+    pub ty: Option<llvm_ir::TypeRef>,
+
     pub points_to: BTreeSet<PANodeId>,
     pub diff: BTreeSet<PANodeId>,
 }
 
 impl<'m> PANode<'m> {
-    pub fn new(id: PANodeId, kind: PANodeKind<'m>) -> Self {
+    pub fn new(id: PANodeId, kind: PANodeKind<'m>, ty: Option<llvm_ir::TypeRef>) -> Self {
         Self {
             id,
             kind,
+            ty,
             points_to: BTreeSet::new(),
             diff: BTreeSet::new(),
         }
@@ -106,6 +121,14 @@ impl<'m> PANodeKind<'m> {
                 allocated_type,
             } => {
                 format!("alloca_object::{}::{}::{}", function, dest, allocated_type)
+            }
+
+            Self::FieldObject {
+                base,
+                field,
+                field_type,
+            } => {
+                format!("field_object::n{}::{:?}::{:?}", base, field, field_type)
             }
 
             Self::FormalParameter {
@@ -144,6 +167,10 @@ impl<'m> PANodeKind<'m> {
                 format!("global_object::{}", name)
             }
 
+            Self::GlobalAddress { name } => {
+                format!("global_address::{}", name)
+            }
+
             Self::TableSlot { global, index } => {
                 format!("table_slot::{}::{}", global, index)
             }
@@ -178,7 +205,7 @@ pub enum PAEdgeKind {
     Store,
 
     /// dst = src[offset]: getelementptr
-    GEP,
+    GEP { indices: Vec<u64> },
 
     /// dst = bitcast src
     BitCast,
@@ -223,6 +250,9 @@ pub struct PACallSite<'m> {
     pub caller: &'m str,
     pub block: String,
     pub kind: PACallSiteKind<'m>,
+
+    /// true if callee is syntactically know, e.g., call void @"_ZN3stdxxx or %_5 = invoke ptr @"_ZN68_$LTxxx
+    pub is_direct: bool,
 }
 
 // #[derive(Debug, Clone)]
@@ -230,6 +260,10 @@ pub struct PointerAssignmentGraph<'m> {
     pub modules: Vec<&'m Module>,
     pub functions_by_type: FunctionsByType<'m>,
     pub functions_by_name: BTreeMap<&'m str, &'m llvm_ir::Function>,
+    pub ssa_types: BTreeMap<String, Option<llvm_ir::TypeRef>>,
+    pub global_types: BTreeMap<String, llvm_ir::TypeRef>,
+
+    // our created cg when on-the-fy
     pub call_graph: CallGraph<'m>,
 
     pub edges: Vec<PAEdge<'m>>,
@@ -276,10 +310,39 @@ impl<'m> PointerAssignmentGraph<'m> {
             .collect();
         let cg = CallGraph::empty();
 
+        // for type filter
+        let mut ssa_types = BTreeMap::new();
+        let mut global_types = BTreeMap::new();
+
+        for module in &modules {
+            for gv in &module.global_vars {
+                global_types.insert(
+                    remove_leading_percent(&format!("{}", gv.name)).to_string(),
+                    gv.ty.clone(),
+                );
+            }
+
+            for func in &module.functions {
+                for param in &func.parameters {
+                    ssa_types.insert(name_key(&param.name), Some(param.ty.clone()));
+                }
+
+                for block in &func.basic_blocks {
+                    for instr in &block.instrs {
+                        record_instruction_result_type(instr, &mut ssa_types);
+                    }
+
+                    record_terminator_result_type(&block.term, &mut ssa_types);
+                }
+            }
+        }
+
         let mut pag = Self {
             modules: modules.clone(),
             functions_by_name,
             functions_by_type: functions_by_type.clone(),
+            ssa_types: ssa_types,
+            global_types: global_types,
             call_graph: cg,
             edges: Vec::new(),
             callsites: BTreeMap::new(),
@@ -322,6 +385,8 @@ impl<'m> PointerAssignmentGraph<'m> {
             "[Timing] pointer assignment graph construction finished in {:.3?} (including call graph construction)",
             pag_build_time
         );
+
+        pag.print_statistics();
 
         pag
     }
@@ -429,6 +494,7 @@ impl<'m> PointerAssignmentGraph<'m> {
         true
     }
 
+    /// visit ir instructions and create constraints
     fn discover_constraints_in_function(&mut self, func: &'m llvm_ir::Function) {
         let function_name = func.name.as_str();
         // TODO:
@@ -484,12 +550,17 @@ impl<'m> PointerAssignmentGraph<'m> {
                     }
 
                     Instruction::GetElementPtr(gep) => {
+                        // we have:
+                        // GlobalObject(@g)  -> GlobalAddress(@g)  [AddressOf]
+                        // GlobalAddress(@g) -> Operand(@g)        [Copy]
+                        // Operand(@g)       -> %gep_dest          [GEP(indices)]
                         self.add_global_address_if_needed(&gep.address, function_name, &block_name);
 
+                        let indices = gep_indices_as_u64(&gep.indices);
                         self.add_pag_edge(
                             PANodeKind::Operand(&gep.address),
                             PANodeKind::ValueName(&gep.dest),
-                            PAEdgeKind::GEP,
+                            PAEdgeKind::GEP { indices },
                             function_name,
                             block_name.clone(),
                         );
@@ -615,34 +686,106 @@ impl<'m> PointerAssignmentGraph<'m> {
     }
 
     /// Model:
-    //
-    //   store ptr @global, ptr %addr
-    //
-    // as:
-    //
-    //   GlobalObject(@global) -[AddressOf]-> Operand(@global)
-    //   Operand(@global)      -[Store]->    Operand(%addr)
-    //
-    // Then the Store solver will propagate pts(Operand(@global))
-    // into the memory objects pointed to by %addr.
-    // same for bitcast and GEP
+    ///
+    ///   store ptr @global, ptr %addr
+    ///
+    /// as:
+    ///
+    ///   GlobalObject(@global) -[AddressOf]-> GlobalAddress(@global)
+    ///   FunctionObject(@f)  -[AddressOf]-> GlobalAddress(@f)
+    ///   GlobalAddress(@global)      -[Store/Copy...]->    Operand(%addr)
+    ///
+    /// Then the Store solver will propagate pts(Operand(@global))
+    /// into the memory objects pointed to by %addr.
+    /// same for bitcast and GEP
     fn add_global_address_if_needed(
         &mut self,
         op: &'m llvm_ir::Operand,
         function_name: &'m str,
         block_name: &str,
     ) {
-        if let Some(global_name) = global_name_from_operand(op) {
+        let Some(global_name) = global_name_from_operand(op) else {
+            return;
+        };
+
+        let clean_name = remove_leading_percent(&global_name).to_string();
+
+        let address_node = PANodeKind::GlobalAddress {
+            name: clean_name.clone(),
+        };
+
+        if self.functions_by_name.contains_key(clean_name.as_str()) {
+            // // FunctionObject(@f) -[AddressOf]-> GlobalAddress(@f)
+            // self.add_pag_edge(
+            //     PANodeKind::FunctionObject {
+            //         function: clean_name.clone(),
+            //     },
+            //     address_node.clone(),
+            //     PAEdgeKind::AddressOf,
+            //     function_name,
+            //     block_name.to_string(),
+            // );
+        } else {
+            // GlobalObject(@g) -[AddressOf]-> GlobalAddress(@g)
             self.add_pag_edge(
-                PANodeKind::GlobalObject { name: global_name },
-                PANodeKind::Operand(op),
+                PANodeKind::GlobalObject {
+                    name: clean_name.clone(),
+                },
+                address_node.clone(),
                 PAEdgeKind::AddressOf,
                 function_name,
                 block_name.to_string(),
             );
         }
+
+        // GlobalAddress(@g/@f) -[Copy]-> Operand(ptr @g/@f)
+        //
+        // This lets normal store/copy/GEP edges that use `op` work.
+        self.add_pag_edge(
+            PANodeKind::GlobalObject { name: global_name },
+            PANodeKind::Operand(op),
+            PAEdgeKind::AddressOf,
+            function_name,
+            block_name.to_string(),
+        );
     }
 
+    fn infer_node_type(&self, kind: &PANodeKind<'m>) -> Option<llvm_ir::TypeRef> {
+        match kind {
+            PANodeKind::Operand(op) => operand_type(op),
+
+            PANodeKind::ValueName(name) => self.ssa_types.get(&name_key(name)).cloned().flatten(),
+
+            PANodeKind::AllocaObject { allocated_type, .. } => {
+                Some(allocated_type.clone()).cloned()
+            }
+
+            PANodeKind::FieldObject { field_type, .. } => field_type.clone(),
+
+            PANodeKind::GlobalObject { name } => self.global_types.get(name).cloned(),
+
+            PANodeKind::FormalParameter {
+                function, index, ..
+            } => self
+                .functions_by_name
+                .get(*function)
+                .and_then(|f| f.parameters.get(*index))
+                .map(|p| p.ty.clone()),
+
+            PANodeKind::FunctionReturn { function } => self
+                .functions_by_name
+                .get(*function)
+                .map(|f| f.return_type.clone()),
+
+            PANodeKind::ReceiverObject { .. }
+            | PANodeKind::IndirectCallTarget { .. }
+            | PANodeKind::TableSlot { .. }
+            | PANodeKind::GlobalAddress { .. }
+            | PANodeKind::FunctionObject { .. } => None,
+        }
+    }
+
+    /// create a pag node if not exist in self.nodes; otherwise, return the node
     pub fn get_or_create_node(&mut self, nodekind: PANodeKind<'m>) -> PANodeId {
         let key = nodekind.key();
 
@@ -662,11 +805,35 @@ impl<'m> PointerAssignmentGraph<'m> {
             id, key
         );
 
-        let node = PANode::new(id, nodekind);
+        let ty = self.infer_node_type(&nodekind);
+        let node = PANode::new(id, nodekind, ty);
         self.nodes.insert(id, node);
         self.node_ids.insert(key, id);
 
         id
+    }
+
+    /// for field-sensitive
+    fn get_or_create_field_object(&mut self, base_obj: PANodeId, indices: &[u64]) -> PANodeId {
+        let base_key = self
+            .nodes
+            .get(&base_obj)
+            .map(|n| n.key())
+            .unwrap_or_else(|| format!("missing_base_n{}", base_obj));
+
+        let base_ty = self.nodes.get(&base_obj).and_then(|n| n.ty.clone());
+
+        let field = normalize_gep_indices(indices);
+
+        let field_ty = base_ty
+            .as_ref()
+            .and_then(|ty| gep_result_object_type(ty, &field));
+
+        self.get_or_create_node(PANodeKind::FieldObject {
+            base: base_obj,
+            field,
+            field_type: field_ty,
+        })
     }
 
     fn same_edge(&self, a: &PAEdge<'m>, b: &PAEdge<'m>) -> bool {
@@ -737,6 +904,7 @@ impl<'m> PointerAssignmentGraph<'m> {
         self.add_to_worklist(edge)
     }
 
+    /// create and add the pag edge if not exist
     fn add_pag_edge(
         &mut self,
         src_kind: PANodeKind<'m>,
@@ -747,6 +915,17 @@ impl<'m> PointerAssignmentGraph<'m> {
     ) {
         let src = self.get_or_create_node(src_kind);
         let dst = self.get_or_create_node(dst_kind);
+
+        if kind == PAEdgeKind::Copy && !self.nodes_are_copy_compatible(src, dst) {
+            debug!(
+                "[PAG] skip incompatible Copy edge: n{} ty={:?} -> n{} ty={:?}",
+                src,
+                self.nodes.get(&src).and_then(|n| n.ty.as_ref()),
+                dst,
+                self.nodes.get(&dst).and_then(|n| n.ty.as_ref()),
+            );
+            return;
+        }
 
         debug!(
             "add_edge: adding edge from n{} -[{:?}]-> n{} in function={} block={}",
@@ -764,6 +943,20 @@ impl<'m> PointerAssignmentGraph<'m> {
         self.insert_edge(edge);
     }
 
+    fn nodes_are_copy_compatible(&self, src: PANodeId, dst: PANodeId) -> bool {
+        let src_ty = self.nodes.get(&src).and_then(|n| n.ty.as_ref());
+        let dst_ty = self.nodes.get(&dst).and_then(|n| n.ty.as_ref());
+
+        match (src_ty, dst_ty) {
+            (Some(src_ty), Some(dst_ty)) => {
+                type_is_pointer_like(src_ty) && type_is_pointer_like(dst_ty)
+            }
+
+            // Unknown type: do not reject.
+            (None, _) | (_, None) => true,
+        }
+    }
+
     fn callsite_function_operand(&self, kind: &PACallSiteKind<'m>) -> Option<&'m llvm_ir::Operand> {
         match kind {
             PACallSiteKind::Call(call) => call_function_operand(&call.function),
@@ -771,6 +964,7 @@ impl<'m> PointerAssignmentGraph<'m> {
         }
     }
 
+    /// push newly discovered callee to pending_functions if not exist
     fn enqueue_reachable_function(&mut self, callee_name: &'m str) {
         if self.visited_functions.contains(callee_name) {
             return;
@@ -804,68 +998,72 @@ impl<'m> PointerAssignmentGraph<'m> {
         block_name: &str,
         callsite_kind: PACallSiteKind<'m>,
     ) {
-        let callsite_id =
-            self.register_callsite(caller_name, block_name.to_string(), callsite_kind.clone());
         let function_operand = self.callsite_function_operand(&callsite_kind);
+        let Some(direct_callee) = function_operand else {
+            return;
+        };
+
+        let direct_callee_name = direct_callee_name(direct_callee);
+        let callsite_id = self.register_callsite(
+            caller_name,
+            block_name.to_string(),
+            callsite_kind.clone(),
+            direct_callee_name.is_some(),
+        );
 
         // ------------------------------------------------------------
         // 1. Direct call: make sure call graph has caller -> callee.
         // ------------------------------------------------------------
-        if let Some(function_operand) = function_operand {
-            if let Some(direct_callee_name) = direct_callee_name(function_operand) {
-                let callee_func = self
-                    .functions_by_name
-                    .get(remove_leading_percent(direct_callee_name.as_str()))
-                    .copied();
+        if let Some(direct_callee_name) = direct_callee_name {
+            let callee_func = self
+                .functions_by_name
+                .get(remove_leading_percent(direct_callee_name.as_str()))
+                .copied();
 
-                if let Some(callee_func) = callee_func {
-                    let callee_name = callee_func.name.as_str();
+            if let Some(callee_func) = callee_func {
+                let callee_name = callee_func.name.as_str();
 
-                    if self.call_graph.add_call_edge(caller_name, callee_name) {
-                        println!(
-                            "[PAG Call] add direct call edge: {} -> {}",
-                            caller_name, callee_name
-                        );
-                    }
-
-                    self.enqueue_reachable_function(callee_name);
-
-                    self.add_constraints_for_call(
-                        caller_name,
-                        block_name,
-                        callsite_kind,
-                        callee_func,
+                if self.call_graph.add_call_edge(caller_name, callee_name) {
+                    debug!(
+                        "[PAG Call] add direct call edge: {} -> {}",
+                        caller_name, callee_name
                     );
                 }
-            } else {
-                // ------------------------------------------------------------
-                // 2. Indirect call through function pointer.
-                //
-                // function_operand -[IndirectCall]-> indirect_target
-                //
-                // Whenever pts(function_operand) changes, solver should process
-                // this edge and update callees.
-                // ------------------------------------------------------------
-                self.add_pag_edge(
-                    PANodeKind::Operand(function_operand),
-                    PANodeKind::IndirectCallTarget {
-                        caller: caller_name,
-                        block: block_name.to_string(),
-                        callsite: format!("callsite_{}", callsite_id),
-                    },
-                    PAEdgeKind::IndirectCall { callsite_id },
-                    caller_name,
-                    block_name.to_string(),
-                );
+
+                self.enqueue_reachable_function(callee_name);
+
+                self.add_constraints_for_call(caller_name, block_name, callsite_kind, callee_func);
             }
+
+            return;
         }
+
+        // ------------------------------------------------------------
+        // 2. Indirect call through function pointer.
+        //
+        // function_operand -[IndirectCall]-> indirect_target
+        //
+        // Whenever pts(function_operand) changes, solver should process
+        // this edge and update callees.
+        // ------------------------------------------------------------
+        self.add_pag_edge(
+            PANodeKind::Operand(direct_callee),
+            PANodeKind::IndirectCallTarget {
+                caller: caller_name,
+                block: block_name.to_string(),
+                callsite: format!("callsite_{}", callsite_id),
+            },
+            PAEdgeKind::IndirectCall { callsite_id },
+            caller_name,
+            block_name.to_string(),
+        );
 
         // ------------------------------------------------------------
         // 3. Receiver-based dispatch.
         //     receiver -[ReceiverCall]-> target
         // LLVM IR has no explicit receiver, but Rust/C++ method calls often pass
         // self/this as the first pointer-like argument. We model the first
-        // pointer-like argument as receiver.
+        // pointer-like argument as receiver for indirect calls only.
         // ------------------------------------------------------------
         let arguments = self.get_callsite_arguments(&callsite_kind);
 
@@ -1023,11 +1221,10 @@ impl<'m> PointerAssignmentGraph<'m> {
             let edges = self.topo_sort_worklist(edges);
 
             println!(
-                "[PAG Solver] iteration {}: nodes={}, edges={}, points_to_facts={}",
+                "[PAG Solver] iteration {}: nodes={}, edges={}",
                 iteration,
                 self.nodes.len(),
                 self.edges.len(),
-                self.total_points_to_facts(),
             );
 
             for edge in edges {
@@ -1039,6 +1236,8 @@ impl<'m> PointerAssignmentGraph<'m> {
                     PAEdgeKind::Load => self.solve_load(edge),
 
                     PAEdgeKind::Store => self.solve_store(edge),
+
+                    PAEdgeKind::GEP { indices } => self.solve_gep(edge.src, edge.dst, &indices),
 
                     PAEdgeKind::IndirectCall { callsite_id } => {
                         self.solve_indirect_call(edge, callsite_id)
@@ -1371,10 +1570,40 @@ impl<'m> PointerAssignmentGraph<'m> {
         changed
     }
 
+    fn solve_gep(&mut self, src: PANodeId, dst: PANodeId, indices: &[u64]) -> bool {
+        let base_objects = self.diff_snapshot(src);
+        if base_objects.is_empty() {
+            return false;
+        }
+
+        let mut changed = false;
+
+        for base_obj in base_objects {
+            let field_obj = self.get_or_create_field_object(base_obj, indices);
+
+            if self.insert_points_to(dst, field_obj) {
+                changed = true;
+            }
+        }
+
+        if changed {
+            let edges = self.get_edges_with_lhs(dst);
+            for edge in edges {
+                self.add_to_worklist(edge);
+            }
+        }
+
+        changed
+    }
+
     fn solve_indirect_call(&mut self, edge: PAEdge<'m>, callsite_id: usize) -> bool {
         let Some(callsite) = self.callsites.get(&callsite_id).cloned() else {
             return false;
         };
+
+        if callsite.is_direct {
+            return false;
+        }
 
         let function_ptr_node: usize = edge.src;
         let pts = self.diff_snapshot(function_ptr_node);
@@ -1385,11 +1614,7 @@ impl<'m> PointerAssignmentGraph<'m> {
         let mut changed = false;
 
         for obj_id in pts {
-            let Some(obj_node) = self.nodes.get(&obj_id) else {
-                continue;
-            };
-
-            let Some(callee_name) = self.node_as_function_name(obj_node) else {
+            let Some(callee_name) = self.get_function_object_from_PANodeID(obj_id) else {
                 continue;
             };
 
@@ -1426,36 +1651,66 @@ impl<'m> PointerAssignmentGraph<'m> {
             return false;
         };
 
+        // TODO: aggressively skip discovering receiver-dispatch calls: this might be wrong for polymophism
+        if callsite.is_direct {
+            debug!(
+                "[PAG Solver] skip receiver resolution for direct callsite: {:?}",
+                callsite
+            );
+            return false;
+        }
+
         let receiver_node = edge.src;
         let receiver_pts = self.diff_snapshot(receiver_node);
         let mut changed = false;
 
         for receiver_obj in receiver_pts {
-            // let candidate_callees = self.candidate_callees_for_receiver(receiver_obj);
+            let candidate_callees = self.candidate_callees_for_receiver(receiver_obj);
 
-            // for callee_func in candidate_callees {
-            //     let callee_name = callee_func.name.as_str();
+            for callee_func in candidate_callees {
+                let callee_name = callee_func.name.as_str();
 
-            //     if self.call_graph.add_call_edge(callsite.caller, callee_name) {
-            //         println!(
-            //             "[PAG Solver] receiver call discovered: {} -> {}",
-            //             callsite.caller, callee_name
-            //         );
+                if self.call_graph.add_call_edge(callsite.caller, callee_name) {
+                    println!(
+                        "[PAG Solver] receiver call discovered: {} -> {}",
+                        callsite.caller, callee_name
+                    );
 
-            //         self.enqueue_reachable_function(callee_name);
-            //         changed = true;
-            //     }
+                    self.enqueue_reachable_function(callee_name);
+                    changed = true;
+                }
 
-            //     self.add_constraints_for_call(
-            //         callsite.caller,
-            //         &callsite.block,
-            //         callsite.kind.clone(),
-            //         callee_func,
-            //     );
-            // }
+                self.add_constraints_for_call(
+                    callsite.caller,
+                    &callsite.block,
+                    callsite.kind.clone(),
+                    callee_func,
+                );
+            }
         }
 
         changed
+    }
+
+    fn get_function_object_from_PANodeID(&self, obj_id: PANodeId) -> Option<String> {
+        let obj_node = self.nodes.get(&obj_id)?;
+
+        match &obj_node.kind {
+            PANodeKind::FunctionObject { function } => Some(function.clone()),
+
+            // Optional: if your global object may actually refer to a function.
+            PANodeKind::GlobalObject { name } => {
+                let clean = name.trim_start_matches('@');
+
+                if self.functions_by_name.contains_key(clean) {
+                    Some(clean.to_string())
+                } else {
+                    None
+                }
+            }
+
+            _ => None,
+        }
     }
 
     /// find callees through vtable/type-based receiver dispatch.
@@ -1527,18 +1782,12 @@ impl<'m> PointerAssignmentGraph<'m> {
         }
     }
 
-    fn node_as_function_name(&self, node: &PANode<'m>) -> Option<String> {
-        match &node.kind {
-            PANodeKind::FunctionObject { function } => Some(function.clone()),
-            _ => None,
-        }
-    }
-
     fn register_callsite(
         &mut self,
         caller: &'m str,
         block: String,
         call: PACallSiteKind<'m>,
+        is_direct: bool,
     ) -> usize {
         let id = self.next_callsite_id;
         self.next_callsite_id += 1;
@@ -1550,6 +1799,7 @@ impl<'m> PointerAssignmentGraph<'m> {
                 caller,
                 block,
                 kind: call,
+                is_direct,
             },
         );
 
@@ -1763,6 +2013,7 @@ impl<'m> PointerAssignmentGraph<'m> {
                 PANodeKind::Operand(_) => "Operand",
 
                 PANodeKind::AllocaObject { .. } => "AllocaObject",
+                PANodeKind::FieldObject { .. } => "FieldObject",
                 PANodeKind::FormalParameter { .. } => "FormalParameter",
                 PANodeKind::FunctionReturn { .. } => "FunctionReturn",
                 PANodeKind::FunctionObject { .. } => "FunctionObject",
@@ -1770,8 +2021,8 @@ impl<'m> PointerAssignmentGraph<'m> {
                 PANodeKind::IndirectCallTarget { .. } => "IndirectCallTarget",
 
                 PANodeKind::GlobalObject { .. } => "GlobalObject",
+                PANodeKind::GlobalAddress { .. } => "GlobalAddress",
                 PANodeKind::TableSlot { .. } => "TableSlot",
-                // PANodeKind::FieldObject { .. } => "FieldObject",
             };
 
             *counts.entry(kind).or_insert(0) += 1;
@@ -1990,6 +2241,7 @@ fn global_name_from_constant(c: &llvm_ir::Constant) -> Option<String> {
     }
 }
 
+/// normalize_function_name here
 /// Typical demangled from:
 /// _ZN68_$LT$alloc..sync..Arc$LT$T$C$A$GT$$u20$as$u20$core..clone..Clone$GT$5clone17h1e76781a8c9a84acE
 /// to:
@@ -2015,4 +2267,173 @@ fn named_struct_name(receiver_ty: &TypeRef) -> Option<String> {
 /// func.name = _ZN4main16spawn_user_query17h488fc5de2a3a0326E
 fn remove_leading_percent(name: &str) -> &str {
     name.strip_prefix('%').unwrap_or(name)
+}
+
+/// compute indices for GEP, can be unknown (empty)
+fn gep_indices_as_u64(indices: &[llvm_ir::Operand]) -> Vec<u64> {
+    let mut out = Vec::new();
+
+    for idx in indices {
+        if let Some(v) = const_int_operand_as_u64(idx) {
+            out.push(v);
+        } else {
+            // Unknown dynamic index: collapse to field-insensitive.
+            return Vec::new();
+        }
+    }
+
+    out
+}
+
+fn const_int_operand_as_u64(op: &llvm_ir::Operand) -> Option<u64> {
+    match op {
+        llvm_ir::Operand::ConstantOperand(c) => match c.as_ref() {
+            llvm_ir::Constant::Int { value, .. } => Some(*value),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+fn normalize_gep_indices(indices: &[u64]) -> Vec<u64> {
+    // LLVM GEP often starts with 0 to mean "within the same object".
+    // For struct field sensitivity, [0, 1] usually means field 1.
+    if indices.first() == Some(&0) {
+        indices[1..].to_vec()
+    } else {
+        indices.to_vec()
+    }
+}
+
+fn name_key(name: &llvm_ir::Name) -> String {
+    format!("{}", name)
+        .trim_start_matches('%')
+        .trim_matches('"')
+        .to_string()
+}
+
+fn record_instruction_result_type(
+    instr: &llvm_ir::instruction::Instruction,
+    ssa_types: &mut BTreeMap<String, Option<llvm_ir::TypeRef>>,
+) {
+    use llvm_ir::instruction::Instruction;
+
+    match instr {
+        Instruction::Alloca(i) => {
+            ssa_types.insert(name_key(&i.dest), None);
+        }
+
+        Instruction::Load(i) => {
+            ssa_types.insert(name_key(&i.dest), Some(i.loaded_ty.clone()));
+        }
+
+        Instruction::GetElementPtr(i) => {
+            ssa_types.insert(name_key(&i.dest), None);
+        }
+
+        Instruction::BitCast(i) => {
+            ssa_types.insert(name_key(&i.dest), Some(i.to_type.clone()));
+        }
+
+        Instruction::AddrSpaceCast(i) => {
+            ssa_types.insert(name_key(&i.dest), Some(i.to_type.clone()));
+        }
+
+        Instruction::IntToPtr(i) => {
+            ssa_types.insert(name_key(&i.dest), Some(i.to_type.clone()));
+        }
+
+        Instruction::Phi(i) => {
+            if let Some((op, _)) = i.incoming_values.first() {
+                if let Some(ty) = operand_type(op) {
+                    ssa_types.insert(name_key(&i.dest), Some(ty));
+                }
+            }
+        }
+
+        Instruction::Select(i) => {
+            if let Some(ty) = operand_type(&i.true_value) {
+                ssa_types.insert(name_key(&i.dest), Some(ty));
+            }
+        }
+
+        Instruction::Call(i) => {
+            if let Some(dest) = &i.dest {
+                if let Some(ret_ty) = call_return_type(&i.function_ty) {
+                    ssa_types.insert(name_key(dest), Some(ret_ty));
+                }
+            }
+        }
+
+        _ => {}
+    }
+}
+
+fn record_terminator_result_type(
+    term: &llvm_ir::terminator::Terminator,
+    ssa_types: &mut BTreeMap<String, Option<llvm_ir::TypeRef>>,
+) {
+    use llvm_ir::terminator::Terminator;
+
+    match term {
+        Terminator::Invoke(i) => {
+            if let Some(ret_ty) = call_return_type(&i.function_ty) {
+                ssa_types.insert(name_key(&i.result), Some(ret_ty));
+            }
+        }
+
+        _ => {}
+    }
+}
+
+fn gep_result_object_type(base_ty: &llvm_ir::TypeRef, indices: &[u64]) -> Option<llvm_ir::TypeRef> {
+    let mut cur_ty = base_ty.clone();
+
+    for (pos, idx) in indices.iter().enumerate() {
+        match cur_ty.as_ref() {
+            // Struct field access.
+            llvm_ir::Type::StructType { element_types, .. } => {
+                let field_idx = *idx as usize;
+                cur_ty = element_types.get(field_idx)?.clone();
+            }
+
+            // Array indexing.
+            llvm_ir::Type::ArrayType { element_type, .. } => {
+                cur_ty = element_type.clone();
+            }
+
+            // Vector indexing.
+            llvm_ir::Type::VectorType { element_type, .. } => {
+                cur_ty = element_type.clone();
+            }
+
+            // Pointer type.
+            //
+            // In typed-pointer LLVM, first GEP index steps through the pointee.
+            // In opaque-pointer LLVM 15+, pointee type may not exist.
+            llvm_ir::Type::PointerType { .. } => {
+                // Usually if the base object type is already the allocated type,
+                // you should not see PointerType here. If you do, skip the first
+                // zero index if present.
+                if pos == 0 && *idx == 0 {
+                    continue;
+                } else {
+                    return None;
+                }
+            }
+
+            _ => {
+                return None;
+            }
+        }
+    }
+
+    Some(cur_ty)
+}
+
+fn call_return_type(function_ty: &llvm_ir::TypeRef) -> Option<llvm_ir::TypeRef> {
+    match function_ty.as_ref() {
+        llvm_ir::Type::FuncType { result_type, .. } => Some(result_type.clone()),
+        _ => None,
+    }
 }

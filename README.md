@@ -46,6 +46,10 @@ or
 cargo run -- hello_world/hello.ll parsed_module.txt
 ```
 
+```bash
+RUST_LOG=ll_parser=debug cargo run -- tests/demo.ll parsed_module.txt 2> debug.log
+```
+
 
 ## issues you may see
 
@@ -110,7 +114,7 @@ Operand(%x) -> Operand(%p)       Store
 
 // %q = gep %p ...
 // q gets p, approximately
-Operand(%p) -> ValueName(%q)     Copy
+Operand(%p) -> ValueName(%q)     GEP
 
 // %q = bitcast %p
 Operand(%p) -> ValueName(%q)     Copy
@@ -132,4 +136,6 @@ CallResult(...) -> ValueName(dest) Copy
 
 
 ## TODO: field sensitive + type filter to filter indirect call
+
+gh auth login
 
