@@ -12,6 +12,10 @@ use std::io::Write;
 use std::panic::PanicHookInfo;
 use std::time::Instant;
 
+/// field-sensitive: to avoid circular dependency in gep, where %x = gep(%a, ...), then %a = %x
+/// then there will be infinite fieldobject created in this loop
+const MAX_FIELD_DEPTH: usize = 2;
+
 pub type PANodeId = usize;
 
 #[derive(Debug, Clone)]
@@ -259,11 +263,15 @@ pub struct PACallSite<'m> {
 pub struct PointerAssignmentGraph<'m> {
     pub modules: Vec<&'m Module>,
     pub functions_by_type: FunctionsByType<'m>,
-    pub functions_by_name: BTreeMap<&'m str, &'m llvm_ir::Function>,
+    pub functions_by_name: BTreeMap<String, &'m llvm_ir::Function>,
     pub ssa_types: BTreeMap<String, Option<llvm_ir::TypeRef>>,
     pub global_types: BTreeMap<String, llvm_ir::TypeRef>,
 
-    // our created cg when on-the-fy
+    // for functions in vtable
+    pub vtable2function: BTreeMap<String, Vec<String>>,
+    pub function2vtable: BTreeMap<String, Vec<String>>,
+
+    // our created cg when on-the-fy, otherwise import from llvm-ir
     pub call_graph: CallGraph<'m>,
 
     pub edges: Vec<PAEdge<'m>>,
@@ -282,10 +290,10 @@ pub struct PointerAssignmentGraph<'m> {
     next_node_id: PANodeId,
 
     /// functions whose instructions have already been scanned and constraints generated
-    pub visited_functions: BTreeSet<&'m str>,
+    pub visited_functions: BTreeSet<String>,
 
     /// functions whose instructions wait to be scanned
-    pub pending_functions: VecDeque<&'m str>,
+    pub pending_functions: VecDeque<String>,
 
     /// for each iteration of Andersen's algorithm, we will discover new edges and new cgnodes
     pub worklist: Vec<PAEdge<'m>>,
@@ -304,20 +312,25 @@ impl<'m> PointerAssignmentGraph<'m> {
         let start_time: Instant = Instant::now();
 
         let modules: Vec<&'m Module> = modules.into_iter().collect();
-        let functions_by_name: BTreeMap<&'m str, &'m llvm_ir::Function> = modules
+        let functions_by_name: BTreeMap<String, &'m llvm_ir::Function> = modules
             .iter()
-            .flat_map(|module| module.functions.iter().map(|f| (f.name.as_str(), f)))
+            .flat_map(|module| {
+                module
+                    .functions
+                    .iter()
+                    .map(|f| (normalize_function_name(f.name.as_str()).to_string(), f))
+            })
             .collect();
         let cg = CallGraph::empty();
+        // let cg = CallGraph::new(modules.clone(), functions_by_type);
 
         // for type filter
         let mut ssa_types = BTreeMap::new();
         let mut global_types = BTreeMap::new();
-
         for module in &modules {
             for gv in &module.global_vars {
                 global_types.insert(
-                    remove_leading_percent(&format!("{}", gv.name)).to_string(),
+                    normalize_function_name(&format!("{}", gv.name)).to_string(),
                     gv.ty.clone(),
                 );
             }
@@ -337,12 +350,16 @@ impl<'m> PointerAssignmentGraph<'m> {
             }
         }
 
+        let (global_function_refs, function_referrers) = collect_vtable_functions(&modules);
+
         let mut pag = Self {
             modules: modules.clone(),
             functions_by_name,
             functions_by_type: functions_by_type.clone(),
             ssa_types: ssa_types,
             global_types: global_types,
+            function2vtable: function_referrers,
+            vtable2function: global_function_refs,
             call_graph: cg,
             edges: Vec::new(),
             callsites: BTreeMap::new(),
@@ -364,8 +381,6 @@ impl<'m> PointerAssignmentGraph<'m> {
             println!("[PAG] warning: cannot find main function; no constraints discovered");
             return pag;
         }
-
-        pag.collect_vtable();
 
         // discover new constraints and solve until fixed point
         // pag.discover_all_constraints();
@@ -394,65 +409,30 @@ impl<'m> PointerAssignmentGraph<'m> {
     /// find main function
     /// heuristics here: my compiled ir all have the following string in main:
     /// _ZN4main4main17h
-    fn find_main_function_name(&self) -> Option<&'m str> {
+    fn find_main_function_name(&self) -> Option<String> {
         // Rust-mangled main usually contains "main4main" or ends around "4main".
         for name in self.functions_by_name.keys() {
             if name.contains("main4main") || name.contains("main17h") {
-                return Some(*name);
+                return Some(name.to_string());
             }
         }
 
         None
     }
 
-    /// process vtables from global variable to find function references in constant tables
-    pub fn collect_vtable(&mut self) {
-        let modules = self.modules.clone();
-        modules.iter().for_each(|module| {
-            module.global_vars.iter().for_each(|gv| {
-                // println!("=== Global Variable: {} ===", gv.name);
-                // println!("type = {:?}", gv.ty);
-
-                if let Some(init) = &gv.initializer {
-                    let name = format!("{}", gv.name);
-                    if name.contains("vtable") // i have only seen this for now
-                        || name.contains("VTABLE")
-                        || name.contains("{{vtable}}")
-                    {
-                        debug!("find vtable: {}", name);
-
-                        let mut refs = Vec::new();
-                        collect_function_refs_from_constant(init, &mut refs);
-
-                        for (idx, func_name) in refs.iter().enumerate() {
-                            debug!("  table slot {}: {}", idx, func_name);
-
-                            self.add_pag_edge(
-                                PANodeKind::FunctionObject {
-                                    function: func_name.clone(),
-                                },
-                                PANodeKind::TableSlot {
-                                    global: format!("{}", gv.name),
-                                    index: idx,
-                                },
-                                PAEdgeKind::AddressOf,
-                                "<global>",
-                                format!("{}", gv.name),
-                            );
-                        }
-                    }
-                }
-            });
-        });
-    }
-
     pub fn discover_reachable_constraints(&mut self) {
         while let Some(function_name) = self.pending_functions.pop_front() {
-            if self.visited_functions.contains(function_name) {
+            if self.visited_functions.contains(&function_name) {
                 continue;
             }
 
-            let Some(func) = self.functions_by_name.get(function_name).copied() else {
+            if should_skip_function_body(&function_name) {
+                println!("[PAG] skip visiting function body: {}", function_name);
+                // self.visited_functions.insert(function_name);
+                continue;
+            }
+
+            let Some(func) = self.functions_by_name.get(&function_name).copied() else {
                 println!(
                     "[PAG] reachable function {} not found in functions_by_name",
                     function_name
@@ -708,7 +688,7 @@ impl<'m> PointerAssignmentGraph<'m> {
             return;
         };
 
-        let clean_name = remove_leading_percent(&global_name).to_string();
+        let clean_name = normalize_function_name(&global_name).to_string();
 
         let address_node = PANodeKind::GlobalAddress {
             name: clean_name.clone(),
@@ -815,24 +795,51 @@ impl<'m> PointerAssignmentGraph<'m> {
 
     /// for field-sensitive
     fn get_or_create_field_object(&mut self, base_obj: PANodeId, indices: &[u64]) -> PANodeId {
-        let base_key = self
-            .nodes
-            .get(&base_obj)
-            .map(|n| n.key())
-            .unwrap_or_else(|| format!("missing_base_n{}", base_obj));
+        let new_field = normalize_gep_indices(indices);
 
-        let base_ty = self.nodes.get(&base_obj).and_then(|n| n.ty.clone());
+        // GEP with no meaningful field access should not create FieldObject(base, []).
+        if new_field.is_empty() {
+            return base_obj;
+        }
 
-        let field = normalize_gep_indices(indices);
+        let Some(base_node) = self.nodes.get(&base_obj) else {
+            return base_obj;
+        };
 
-        let field_ty = base_ty
+        let (root_base, mut field, root_ty) = match &base_node.kind {
+            PANodeKind::FieldObject {
+                base,
+                field,
+                field_type,
+            } => {
+                // Flatten:
+                // FieldObject(base=A, field=[1]) + GEP [2]
+                // becomes FieldObject(base=A, field=[1,2])
+                (*base, field.clone(), field_type.clone())
+            }
+
+            _ => (base_obj, Vec::new(), base_node.ty.clone()),
+        };
+
+        field.extend(new_field);
+
+        if field.len() > MAX_FIELD_DEPTH {
+            debug!(
+                "[PAG GEP] field path too deep; collapse to root base: root=n{} field={:?}",
+                root_base, field
+            );
+
+            return root_base;
+        }
+
+        let field_type = root_ty
             .as_ref()
             .and_then(|ty| gep_result_object_type(ty, &field));
 
         self.get_or_create_node(PANodeKind::FieldObject {
-            base: base_obj,
+            base: root_base,
             field,
-            field_type: field_ty,
+            field_type,
         })
     }
 
@@ -965,7 +972,8 @@ impl<'m> PointerAssignmentGraph<'m> {
     }
 
     /// push newly discovered callee to pending_functions if not exist
-    fn enqueue_reachable_function(&mut self, callee_name: &'m str) {
+    fn enqueue_reachable_function(&mut self, callee_name: &str) {
+        let callee_name = normalize_function_name(callee_name);
         if self.visited_functions.contains(callee_name) {
             return;
         }
@@ -982,9 +990,94 @@ impl<'m> PointerAssignmentGraph<'m> {
             return;
         }
 
-        debug!("[PAG] enqueue newly reachable function: {}", callee_name);
+        if should_skip_function_body(callee_name) {
+            println!("[PAG] skip visiting function body: {}", callee_name);
+            return;
+        }
 
-        self.pending_functions.push_back(callee_name);
+        println!("[PAG] enqueue newly reachable function: {}", callee_name);
+
+        self.pending_functions.push_back(callee_name.to_string());
+    }
+
+    fn enqueue_vtable_targets_containing_function_pattern(&mut self, pattern: &str) {
+        let mut candidate_globals = Vec::new();
+
+        for (func, globals) in &self.function2vtable {
+            if func.contains(pattern) {
+                candidate_globals.extend(globals.iter().cloned());
+            }
+        }
+
+        candidate_globals.sort();
+        candidate_globals.dedup();
+
+        let mut targets = Vec::new();
+
+        for global in candidate_globals {
+            if let Some(refs) = self.vtable2function.get(&global) {
+                debug!(
+                    "[PAG reachability] global {} selected by pattern {}, refs={:?}",
+                    global, pattern, refs
+                );
+
+                for r in refs {
+                    if !r.contains("drop_in_place") {
+                        targets.push(r.clone());
+                    }
+                }
+            }
+        }
+
+        targets.sort();
+        targets.dedup();
+
+        for target in targets {
+            self.enqueue_reachable_function(&target);
+        }
+    }
+
+    /// find potential closure function running in a thread spawn and enqueue it
+    fn enqueue_spawn_unchecked_closures(&mut self) {
+        let mut targets = Vec::new();
+
+        for name in self.functions_by_name.keys() {
+            if is_spawn_unchecked_closure(name) {
+                targets.push(name.clone());
+            }
+        }
+
+        targets.sort();
+        targets.dedup();
+
+        for target in targets {
+            debug!(
+                "[PAG reachability] enqueue spawn_unchecked closure summary target: {}",
+                target
+            );
+
+            self.enqueue_reachable_function(&target);
+        }
+    }
+
+    /// heuristics here:
+    /// seen from demo.ll @vtable.2
+    /// the path to the target closure goes through a vtable / function-pointer callback / thread wrapper, not only direct calls.
+    /// we skip that many relations, directly bound them
+    fn maybe_apply_thread_spawn_summary(&mut self, callee_name: &str) {
+        let callee_name = normalize_function_name(callee_name);
+
+        if callee_name.contains("_ZN3std6thread7Builder16spawn_unchecked_")
+            || callee_name.contains("_ZN3std6thread7Builder15spawn_unchecked")
+            || callee_name.contains("_ZN3std6thread5spawn")
+        {
+            debug!(
+                "[PAG reachability] applying thread-spawn closure summary for {}",
+                callee_name
+            );
+
+            self.enqueue_spawn_unchecked_closures();
+        }
     }
 
     /// this function does the following:
@@ -1017,7 +1110,7 @@ impl<'m> PointerAssignmentGraph<'m> {
         if let Some(direct_callee_name) = direct_callee_name {
             let callee_func = self
                 .functions_by_name
-                .get(remove_leading_percent(direct_callee_name.as_str()))
+                .get(normalize_function_name(direct_callee_name.as_str()))
                 .copied();
 
             if let Some(callee_func) = callee_func {
@@ -1029,6 +1122,8 @@ impl<'m> PointerAssignmentGraph<'m> {
                         caller_name, callee_name
                     );
                 }
+
+                self.maybe_apply_thread_spawn_summary(callee_name);
 
                 self.enqueue_reachable_function(callee_name);
 
@@ -1419,19 +1514,22 @@ impl<'m> PointerAssignmentGraph<'m> {
             return false;
         }
 
-        let changed = self.union_points_to(dst, &src_diff);
-        if changed {
-            debug!(
-                "[PAG Solver] solve_copy: pts(n{}) += pts(n{}) (changed={})",
-                dst, src, changed
-            );
-
-            let edges = self.get_edges_with_lhs(dst);
-            for edge in edges {
-                self.add_to_worklist(edge);
-            }
+        let delta = self.union_points_to_collect_delta(dst, &src_diff);
+        if delta.is_empty() {
+            return false;
         }
-        changed
+
+        debug!(
+            "[PAG Solver] solve_copy: pts(n{}) += pts(n{}) (changed={:?})",
+            dst, src, delta
+        );
+
+        let edges = self.get_edges_with_lhs(dst);
+        for edge in edges {
+            self.add_to_worklist(edge);
+        }
+
+        true
     }
 
     /// Load constraint:
@@ -1457,11 +1555,15 @@ impl<'m> PointerAssignmentGraph<'m> {
 
         let mut changed = false;
 
-        for obj in src_diff {
+        for obj in src_diff.iter() {
+            if !self.object_may_hold_pointer_value(*obj) {
+                continue;
+            }
+
             // For dst = *src and obj ∈ pts(src),
             // create obj -[Copy]-> dst.
             let edge = PAEdge {
-                src: obj,
+                src: *obj,
                 dst: dst,
                 kind: PAEdgeKind::Copy,
                 function: edge.function,
@@ -1470,8 +1572,8 @@ impl<'m> PointerAssignmentGraph<'m> {
 
             if self.insert_edge(edge) {
                 debug!(
-                    "[PAG Solver] solve_load: create new Copy edge n{} -[Copy]-> n{} (changed={})",
-                    obj, dst, true
+                    "[PAG Solver] solve_load: create new Copy edge n{} -[Copy]-> n{} (changed={:?})",
+                    obj, dst, src_diff
                 );
 
                 let edges = self.get_edges_with_lhs(dst);
@@ -1505,17 +1607,22 @@ impl<'m> PointerAssignmentGraph<'m> {
         let dst = edge.dst;
         let src_diff = self.diff_snapshot(src);
         let dst_diff = self.diff_snapshot(dst);
+        let dst_pts = self.points_to_snapshot(dst);
         let mut changed = false;
 
         // Case A:
         // dst newly points to some object obj.
         // Then the existing src values should flow to obj.
-        for obj in dst_diff {
+        for obj in dst_diff.iter() {
+            if !self.store_may_write_pointer_value_to_object(src, *obj) {
+                continue;
+            }
+
             // For *dst = src and obj ∈ pts(dst),
             // create src -[Copy]-> obj.
             let edge = PAEdge {
                 src: src,
-                dst: obj,
+                dst: *obj,
                 kind: PAEdgeKind::Copy,
                 function: edge.function,
                 block: edge.block.clone(),
@@ -1523,11 +1630,11 @@ impl<'m> PointerAssignmentGraph<'m> {
 
             if self.insert_edge(edge) {
                 debug!(
-                    "[PAG Solver] solve_store: create new Copy edge n{} -[Copy]-> n{} (changed={})",
-                    src, obj, true
+                    "[PAG Solver] solve_store: create new Copy edge n{} -[Copy]-> n{} (dst changed={:?})",
+                    src, obj, dst_diff
                 );
 
-                let edges = self.get_edges_with_lhs(obj);
+                let edges = self.get_edges_with_lhs(*obj);
                 for edge in edges {
                     self.add_to_worklist(edge);
                 }
@@ -1536,7 +1643,6 @@ impl<'m> PointerAssignmentGraph<'m> {
             }
         }
 
-        let dst_pts = self.points_to_snapshot(dst);
         // Case B:
         // src has new values, and dst already points to objects.
         // The already-created copy edges src -> obj will propagate src.diff.
@@ -1544,6 +1650,10 @@ impl<'m> PointerAssignmentGraph<'m> {
         // However, if those copy edges were not created before, make sure they exist.
         if !src_diff.is_empty() {
             for obj in dst_pts {
+                if !self.store_may_write_pointer_value_to_object(src, obj) {
+                    continue;
+                }
+
                 let edge = PAEdge {
                     src: src,
                     dst: obj,
@@ -1554,8 +1664,8 @@ impl<'m> PointerAssignmentGraph<'m> {
 
                 if self.insert_edge(edge) {
                     debug!(
-                    "[PAG Solver] solve_store: create new Copy edge n{} -[Copy]-> n{} (changed={})",
-                    src, obj, true);
+                    "[PAG Solver] solve_store: create new Copy edge n{} -[Copy]-> n{} (src changed={:?})",
+                    src, obj, src_diff);
 
                     let edges = self.get_edges_with_lhs(obj);
                     for edge in edges {
@@ -1578,8 +1688,8 @@ impl<'m> PointerAssignmentGraph<'m> {
 
         let mut changed = false;
 
-        for base_obj in base_objects {
-            let field_obj = self.get_or_create_field_object(base_obj, indices);
+        for base_obj in base_objects.iter() {
+            let field_obj = self.get_or_create_field_object(*base_obj, indices);
 
             if self.insert_points_to(dst, field_obj) {
                 changed = true;
@@ -1587,6 +1697,11 @@ impl<'m> PointerAssignmentGraph<'m> {
         }
 
         if changed {
+            debug!(
+                "[PAG Solver] solve_gep: create field objects: {:?}",
+                base_objects
+            );
+
             let edges = self.get_edges_with_lhs(dst);
             for edge in edges {
                 self.add_to_worklist(edge);
@@ -1614,7 +1729,7 @@ impl<'m> PointerAssignmentGraph<'m> {
         let mut changed = false;
 
         for obj_id in pts {
-            let Some(callee_name) = self.get_function_object_from_PANodeID(obj_id) else {
+            let Some(callee_name) = self.get_function_object_from_nodeid(obj_id) else {
                 continue;
             };
 
@@ -1692,7 +1807,7 @@ impl<'m> PointerAssignmentGraph<'m> {
         changed
     }
 
-    fn get_function_object_from_PANodeID(&self, obj_id: PANodeId) -> Option<String> {
+    fn get_function_object_from_nodeid(&self, obj_id: PANodeId) -> Option<String> {
         let obj_node = self.nodes.get(&obj_id)?;
 
         match &obj_node.kind {
@@ -1813,6 +1928,27 @@ impl<'m> PointerAssignmentGraph<'m> {
         }
     }
 
+    fn union_points_to_collect_delta(
+        &mut self,
+        node: PANodeId,
+        new_pts: &BTreeSet<PANodeId>,
+    ) -> BTreeSet<PANodeId> {
+        let Some(n) = self.nodes.get_mut(&node) else {
+            return BTreeSet::new();
+        };
+
+        let mut delta = BTreeSet::new();
+
+        for p in new_pts {
+            if n.points_to.insert(*p) {
+                n.diff.insert(*p);
+                delta.insert(*p);
+            }
+        }
+
+        delta
+    }
+
     fn points_to_snapshot(&self, node: PANodeId) -> BTreeSet<PANodeId> {
         self.nodes
             .get(&node)
@@ -1855,6 +1991,42 @@ impl<'m> PointerAssignmentGraph<'m> {
         }
 
         changed
+    }
+
+    /// type filter
+    fn store_may_write_pointer_value_to_object(
+        &self,
+        src_value: PANodeId,
+        dst_object: PANodeId,
+    ) -> bool {
+        let src_ty = self.nodes.get(&src_value).and_then(|n| n.ty.as_ref());
+        let obj_ty = self.nodes.get(&dst_object).and_then(|n| n.ty.as_ref());
+
+        match (src_ty, obj_ty) {
+            // Unknown: keep conservative.
+            (None, _) | (_, None) => true,
+
+            (Some(src_ty), Some(obj_ty)) => {
+                // We only track pointer values in points-to sets.
+                // If src is definitely not pointer-like, do not store it into points-to memory.
+                if !type_is_pointer_like(src_ty) {
+                    return false;
+                }
+
+                // If the destination object cannot contain a pointer, skip.
+                type_may_contain_pointer(obj_ty)
+            }
+        }
+    }
+
+    /// type filter
+    fn object_may_hold_pointer_value(&self, obj: PANodeId) -> bool {
+        let obj_ty = self.nodes.get(&obj).and_then(|n| n.ty.as_ref());
+
+        match obj_ty {
+            None => true,
+            Some(ty) => type_may_contain_pointer(ty),
+        }
     }
 
     /// print the points-to sets of all nodes in the PAG to a file
@@ -1972,6 +2144,7 @@ impl<'m> PointerAssignmentGraph<'m> {
 
         self.print_node_kind_statistics();
         self.print_edge_kind_statistics();
+        self.print_vtable_function_refs();
     }
 
     fn print_edge_kind_statistics(&self) {
@@ -2035,20 +2208,45 @@ impl<'m> PointerAssignmentGraph<'m> {
             println!("{}: {}", kind, count);
         }
     }
+
+    pub fn print_vtable_function_refs(&self) {
+        println!("=== Global Function Refs ===");
+        println!("globals with function refs: {}", self.vtable2function.len());
+
+        for (global, refs) in &self.vtable2function {
+            println!("{}:", global);
+            for r in refs {
+                println!("  {}", r);
+            }
+        }
+    }
 }
 
 /// Helper functions
 
-fn direct_callee_name(op: &Operand) -> Option<String> {
+fn direct_callee_name(op: &llvm_ir::Operand) -> Option<String> {
     match op {
-        Operand::ConstantOperand(cref) => match cref.as_ref() {
-            Constant::GlobalReference { name, .. } => Some(format!("{}", name)),
-            _ => None,
-        },
+        llvm_ir::Operand::ConstantOperand(cref) => direct_callee_name_from_constant(cref.as_ref()),
 
-        Operand::LocalOperand { name, .. } => {
-            // This is usually an indirect call through a local function pointer.
-            Some(format!("{}", name))
+        // LocalOperand means indirect call through function pointer.
+        llvm_ir::Operand::LocalOperand { .. } => None,
+
+        _ => None,
+    }
+}
+
+fn direct_callee_name_from_constant(c: &llvm_ir::Constant) -> Option<String> {
+    match c {
+        llvm_ir::Constant::GlobalReference { name, .. } => {
+            Some(normalize_function_name(&format!("{}", name)).to_string())
+        }
+
+        llvm_ir::Constant::BitCast(bitcast) => {
+            direct_callee_name_from_constant(bitcast.operand.as_ref())
+        }
+
+        llvm_ir::Constant::GetElementPtr(gep) => {
+            direct_callee_name_from_constant(gep.address.as_ref())
         }
 
         _ => None,
@@ -2184,7 +2382,7 @@ fn read_constant_table(c: &ConstantRef, indent: usize) {
 fn collect_function_refs_from_constant(c: &ConstantRef, out: &mut Vec<String>) {
     match c.as_ref() {
         Constant::GlobalReference { name, .. } => {
-            out.push(format!("{}", name));
+            out.push(normalize_function_name(&format!("{}", name)).to_string());
         }
 
         Constant::Struct { values, .. } => {
@@ -2262,11 +2460,14 @@ fn named_struct_name(receiver_ty: &TypeRef) -> Option<String> {
 }
 
 /// direct_callee_name direct output: "%_ZN4main16spawn_user_query17h488fc5de2a3a0326E"
+/// or @"_ZN4main16spawn_user_query28_$u7b$$u7b$closure$u7d$$u7d$17hb7b958eb69c4a9bcE"
 /// but output from functions_by_name:
 /// key = _ZN4main16spawn_user_query17h488fc5de2a3a0326E
 /// func.name = _ZN4main16spawn_user_query17h488fc5de2a3a0326E
-fn remove_leading_percent(name: &str) -> &str {
-    name.strip_prefix('%').unwrap_or(name)
+fn normalize_function_name(name: &str) -> &str {
+    name.trim_start_matches('%')
+        .trim_start_matches('@')
+        .trim_matches('"')
 }
 
 /// compute indices for GEP, can be unknown (empty)
@@ -2308,6 +2509,7 @@ fn normalize_gep_indices(indices: &[u64]) -> Vec<u64> {
 fn name_key(name: &llvm_ir::Name) -> String {
     format!("{}", name)
         .trim_start_matches('%')
+        .trim_start_matches('@')
         .trim_matches('"')
         .to_string()
 }
@@ -2435,5 +2637,271 @@ fn call_return_type(function_ty: &llvm_ir::TypeRef) -> Option<llvm_ir::TypeRef> 
     match function_ty.as_ref() {
         llvm_ir::Type::FuncType { result_type, .. } => Some(result_type.clone()),
         _ => None,
+    }
+}
+
+/// heuristically skip visiting and creating constraints for the functions with the following signatures
+/// do not skip the following:
+///  Arc, Mutex, RwLock, tokio, and futures
+///  _ZN3std6thread5spawn17h22da0a742a9c3c20E
+//   _ZN3std6thread7Builder15spawn_unchecked17h0182a1068d22239dE
+//   _ZN3std6thread7Builder16spawn_unchecked_17hba2e176eb3c3af33E
+//   _ZN3std10sys_common9backtrace28__rust_begin_short_backtrace17h06bb21b8ede9b485E
+fn should_skip_function_body(function_name: &str) -> bool {
+    let name = normalize_function_name(function_name);
+
+    if name.contains("drop_in_place") {
+        return true;
+    }
+
+    if name.contains("panic")
+        || name.contains("panicking")
+        || name.contains("unwrap_failed")
+        || name.contains("rust_begin_unwind")
+        || name.contains("__rust_start_panic")
+        || name.contains("_Unwind_")
+    {
+        return true;
+    }
+
+    if name.starts_with("llvm.")
+        || name.contains("llvm.")
+        || name.contains("memcpy")
+        || name.contains("memmove")
+        || name.contains("memset")
+    {
+        return true;
+    }
+
+    false
+}
+// fn should_skip_function_body(function_name: &str) -> bool {
+//     let name = normalize_function_name(function_name);
+
+//     // ------------------------------------------------------------
+//     // Rust destructor/drop glue
+//     // ------------------------------------------------------------
+//     if name.contains("drop_in_place") {
+//         return true;
+//     }
+
+//     // ------------------------------------------------------------
+//     // Rust allocation/deallocation internals
+//     // ------------------------------------------------------------
+//     if name.contains("alloc..alloc")
+//         || name.contains("alloc..raw_vec")
+//         || name.contains("alloc..boxed")
+//         || name.contains("alloc..vec")
+//         || name.contains("__rust_alloc")
+//         || name.contains("__rust_dealloc")
+//         || name.contains("__rust_realloc")
+//         || name.contains("__rust_alloc_zeroed")
+//     {
+//         return true;
+//     }
+
+//     // ------------------------------------------------------------
+//     // Panic/unwind/abort machinery
+//     // ------------------------------------------------------------
+//     if name.contains("panic")
+//         || name.contains("unwrap_failed")
+//         || name.contains("begin_panic")
+//         || name.contains("panicking")
+//         || name.contains("rust_begin_unwind")
+//         || name.contains("_Unwind_")
+//         || name.contains("__rust_start_panic")
+//         || name.contains("panic_bounds_check")
+//         || name.contains("panic_fmt")
+//         || name.contains("panic_nounwind")
+//     {
+//         return true;
+//     }
+
+//     // ------------------------------------------------------------
+//     // Formatting/debug/display machinery
+//     // Usually huge and rarely useful for application pointer flow.
+//     // ------------------------------------------------------------
+//     if name.contains("core..fmt")
+//         || name.contains("alloc..fmt")
+//         || name.contains("fmt..Formatter")
+//         || name.contains("Arguments")
+//         || name.contains("Display")
+//         || name.contains("Debug")
+//     {
+//         return true;
+//     }
+
+//     // ------------------------------------------------------------
+//     // Iterator adapter internals
+//     // Often very noisy in optimized Rust IR.
+//     // Be careful: skip only if your target is not iterator logic.
+//     // ------------------------------------------------------------
+//     if name.contains("core..iter..adapters")
+//         || name.contains("core..slice..iter")
+//         || name.contains("Iterator")
+//         || name.contains("next17h")
+//     {
+//         return true;
+//     }
+
+//     // ------------------------------------------------------------
+//     // Slice/string/str utility internals
+//     // Skip if you do not care about standard-library string internals.
+//     // ------------------------------------------------------------
+//     if name.contains("core..str")
+//         || name.contains("alloc..string")
+//         || name.contains("alloc..str")
+//         || name.contains("core..slice")
+//     {
+//         return true;
+//     }
+
+//     // // ------------------------------------------------------------
+//     // // HashMap/HashSet internals.
+//     // // Be careful: if your analysis target is map aliasing, do NOT skip these.
+//     // // ------------------------------------------------------------
+//     // if name.contains("hashbrown")
+//     //     || name.contains("std..collections..hash..map")
+//     //     || name.contains("alloc..collections")
+//     // {
+//     //     return true;
+//     // }
+
+//     // // ------------------------------------------------------------
+//     // // Synchronization primitive internals.
+//     // // Be careful: if your target is Arc/Mutex/RwLock behavior, do NOT skip.
+//     // // ------------------------------------------------------------
+//     // if name.contains("alloc..sync..Arc")
+//     //     || name.contains("std..sync")
+//     //     || name.contains("parking_lot")
+//     //     || name.contains("lock_api")
+//     // {
+//     //     return true;
+//     // }
+
+//     // ------------------------------------------------------------
+//     // Compiler intrinsics / LLVM intrinsics / sanitizer-ish functions.
+//     // ------------------------------------------------------------
+//     if name.starts_with("llvm.")
+//         || name.starts_with("core..intrinsics")
+//         || name.contains("llvm.")
+//         || name.contains("memcpy")
+//         || name.contains("memmove")
+//         || name.contains("memset")
+//     {
+//         return true;
+//     }
+
+//     // ------------------------------------------------------------
+//     // Rust runtime/language items
+//     // ------------------------------------------------------------
+//     if name.contains("lang_start")
+//         || name.contains("call_once")
+//         // || name.contains("__rust")
+//         // || name.contains("std..rt")
+//         // || name.contains("std..sys")
+//         || name.contains("std..panicking")
+//     // || name.contains("core..ops..function..FnOnce")
+//     {
+//         return true;
+//     }
+
+//     false
+// }
+
+/// process vtables from global variable to find function references in constant tables
+fn collect_vtable_functions<'m>(
+    modules: &[&'m llvm_ir::Module],
+) -> (BTreeMap<String, Vec<String>>, BTreeMap<String, Vec<String>>) {
+    let mut global_function_refs: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    let mut function_referrers: BTreeMap<String, Vec<String>> = BTreeMap::new();
+
+    for module in modules {
+        for gv in &module.global_vars {
+            let Some(init) = &gv.initializer else {
+                continue;
+            };
+            let name = format!("{}", gv.name);
+            let global_name = normalize_function_name(&name);
+
+            if global_name.contains("vtable") // i have only seen this for now
+                        || global_name.contains("VTABLE")
+                        || global_name.contains("{{vtable}}")
+            {
+                debug!("find vtable: {}", name);
+
+                let mut refs = Vec::new();
+                collect_function_refs_from_constant(init, &mut refs);
+
+                refs.sort();
+                refs.dedup();
+
+                if refs.is_empty() {
+                    continue;
+                }
+
+                for func_ref in &refs {
+                    function_referrers
+                        .entry(func_ref.clone())
+                        .or_default()
+                        .push(global_name.to_string());
+                }
+
+                global_function_refs.insert(global_name.to_string(), refs);
+            }
+        }
+    }
+
+    for globals in function_referrers.values_mut() {
+        globals.sort();
+        globals.dedup();
+    }
+
+    (global_function_refs, function_referrers)
+}
+
+fn is_thread_spawn_relevant_closure_or_backtrace(name: &str) -> bool {
+    let name = normalize_function_name(name);
+
+    name.contains("_ZN4core3ops8function6FnOnce40call_once$u7b$$u7b$vtable.shim")
+        || name.contains("_ZN3std6thread7Builder16spawn_unchecked_28_$u7b$$u7b$closure$u7d$$u7d$")
+        || name.contains("_ZN3std10sys_common9backtrace28__rust_begin_short_backtrace")
+        || name.contains("_ZN4main16spawn_user_query28_$u7b$$u7b$closure$u7d$$u7d$")
+}
+
+fn is_spawn_unchecked_closure(name: &str) -> bool {
+    let name = normalize_function_name(name);
+
+    name.contains("_ZN3std6thread7Builder16spawn_unchecked_28_$u7b$$u7b$closure$u7d$$u7d$")
+}
+
+fn type_may_contain_pointer(ty: &llvm_ir::TypeRef) -> bool {
+    type_may_contain_pointer_depth(ty, 0)
+}
+
+fn type_may_contain_pointer_depth(ty: &llvm_ir::TypeRef, depth: usize) -> bool {
+    if depth > 8 {
+        return true;
+    }
+
+    match ty.as_ref() {
+        llvm_ir::Type::PointerType { .. } => true,
+
+        llvm_ir::Type::StructType { element_types, .. } => element_types
+            .iter()
+            .any(|elem| type_may_contain_pointer_depth(elem, depth + 1)),
+
+        llvm_ir::Type::ArrayType { element_type, .. } => {
+            type_may_contain_pointer_depth(element_type, depth + 1)
+        }
+
+        llvm_ir::Type::VectorType { element_type, .. } => {
+            type_may_contain_pointer_depth(element_type, depth + 1)
+        }
+
+        // Named structs may be opaque or recursive. Keep conservative.
+        llvm_ir::Type::NamedStructType { .. } => true,
+
+        _ => false,
     }
 }
