@@ -6,8 +6,6 @@ use std::error::Error;
 use std::fs::File;
 use std::io::Write;
 
-
-
 /// The control flow graph for a particular function.
 ///
 /// To construct a `ControlFlowGraph`, use
@@ -229,5 +227,5 @@ impl<'m> ControlFlowGraph<'m> {
         writeln!(file)?;
 
         Ok(())
-    }    
+    }
 }

@@ -114,15 +114,15 @@ fn main() -> Result<(), Box<dyn Error>> {
     let analysis = ModuleAnalysis::new(&module);
     println!("Parsed LLVM IR from: {}", input_ll);
 
-    // print cfg for each function
-    let mut file = std::fs::File::create("cfg.txt")?;
-    for func in &module.functions {
-        let fn_analysis = analysis.fn_analysis(&func.name);
-        let cfg = fn_analysis.control_flow_graph();
+    // // print cfg for each function
+    // let mut file = std::fs::File::create("cfg.txt")?;
+    // for func in &module.functions {
+    //     let fn_analysis = analysis.fn_analysis(&func.name);
+    //     let cfg = fn_analysis.control_flow_graph();
 
-        cfg.print_cfg(&func.name, &mut file)?;
-    }
-    println!("Wrote control flow graph to cfg.txt");
+    //     cfg.print_cfg(&func.name, &mut file)?;
+    // }
+    // println!("Wrote control flow graph to cfg.txt");
 
     // analysis.call_graph().print_call_graph();
     // println!("Wrote pointer assignment graph to cg.txt");

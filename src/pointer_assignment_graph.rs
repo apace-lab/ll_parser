@@ -1,4 +1,5 @@
 use crate::call_graph::CallGraph;
+use crate::ControlFlowGraph;
 use crate::FunctionsByType;
 use llvm_ir::instruction::{InlineAssembly, Instruction};
 use llvm_ir::{Constant, ConstantRef, Function, Module, Name, Operand, Type, TypeRef};
@@ -341,6 +342,11 @@ pub struct PointerAssignmentGraph<'m> {
 
     /// true when we do on-the-fly to compute reachable functions
     pub on_the_fly: bool,
+
+    /// true when skip the analysis on basicblocks with "cleanup" and their successors
+    /// these are mostly unwind paths, panic cleanup, and destructor paths.
+    /// our goal is normal execution pointer flow rather than unwind/destructor behavior.
+    pub skip_cleanup_blocks: bool,
 }
 
 impl<'m> PointerAssignmentGraph<'m> {
@@ -413,6 +419,7 @@ impl<'m> PointerAssignmentGraph<'m> {
             store_dst_edges: BTreeMap::new(),
             memcpy_dst_edges: BTreeMap::new(),
             on_the_fly: true, //TODO: pass in ?
+            skip_cleanup_blocks: true,
         };
 
         if let Some(main_name) = pag.find_main_function_name() {
@@ -505,6 +512,37 @@ impl<'m> PointerAssignmentGraph<'m> {
         }
     }
 
+    /// compute the cleanup basicblocks and its successors that do not have normal incoming control flow edges
+    /// return a set of basicblock names that need to skip
+    fn compute_cleanup_blocks_with_cfg(&mut self, func: &llvm_ir::Function) -> BTreeSet<String> {
+        let cfg: ControlFlowGraph<'_> = ControlFlowGraph::new(func);
+
+        let mut skip = BTreeSet::new();
+        let mut worklist = VecDeque::new();
+
+        for bb in &func.basic_blocks {
+            let name = normalize_block_label(&format!("{}", &bb.name));
+            if is_cleanup_block_name(&name) {
+                if skip.insert(name.clone()) {
+                    worklist.push_back(name);
+                }
+            }
+        }
+
+        while let Some(block_name) = worklist.pop_front() {
+            let name = Name::Name(Box::new(block_name));
+            for succ in cfg.succs(&name) {
+                let succ = normalize_block_label(&format!("{}", succ));
+
+                if skip.insert(succ.clone()) {
+                    worklist.push_back(succ);
+                }
+            }
+        }
+
+        skip
+    }
+
     /// TODO: handle special rust functions, e.g., clone()
     pub fn handle_special_rust_functions(
         &mut self,
@@ -563,8 +601,17 @@ impl<'m> PointerAssignmentGraph<'m> {
     fn discover_constraints_in_function(&mut self, func: &'m llvm_ir::Function) {
         let function_name = func.name.clone();
 
+        let skip = self.compute_cleanup_blocks_with_cfg(func);
+
         for block in &func.basic_blocks {
             let block_name = format!("{}", block.name);
+            if skip.contains(&normalize_block_label(&block_name)) {
+                debug!(
+                    "discover_constraints_in_function: skip basicblock={}",
+                    block_name
+                );
+                continue;
+            }
 
             for instr in &block.instrs {
                 match instr {
@@ -3253,4 +3300,15 @@ fn memcpy_object_types_compatible(src_ty: &llvm_ir::TypeRef, dst_ty: &llvm_ir::T
     // Opaque pointers make exact checking hard.
     // If both may contain pointers, allow conservatively.
     type_may_contain_pointer(src_ty) && type_may_contain_pointer(dst_ty)
+}
+
+fn normalize_block_label(name: &str) -> String {
+    name.trim()
+        .trim_start_matches('%')
+        .trim_matches('"')
+        .to_string()
+}
+
+fn is_cleanup_block_name(name: &str) -> bool {
+    name == "cleanup" || name.starts_with("cleanup.") || name.starts_with("cleanup")
 }

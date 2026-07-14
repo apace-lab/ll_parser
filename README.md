@@ -13,7 +13,7 @@ https://github.com/cdisselkoen/llvm-ir-taint
 
 We use llvm 19.1.7 (the most recent version supported by llvm-ir) and rustup 1.82.0 (the compatible version)
 
-however, llvm 17 (the most recent version supported by llvm-ir-analysis) and rustup 1.77.x (the compatible version) 
+however, llvm 17 (the most recent version supported by llvm-ir-analysis) and rustup 1.77.x (the compatible version) are kind of outdated ... 
 
 
 ### how to config
@@ -129,6 +129,11 @@ Operand(actual) -> FormalParameter(...) Copy
 FunctionReturn(...) -> ValueName(dest) Copy
 ```
 
+
+## speciak handling 
+- `on_the_fly`
+- `skip_cleanup_blocks`
+- `vtable`
 
 
 ## special Rust fuctions (in `handle_special_rust_functions`)
