@@ -6,10 +6,8 @@ use log::debug;
 use rustc_demangle::demangle;
 use std::collections::{BTreeMap, BTreeSet, HashMap, VecDeque};
 use std::error::Error;
-use std::fmt;
 use std::fs::File;
 use std::io::Write;
-use std::panic::PanicHookInfo;
 use std::time::Instant;
 
 /// field-sensitive: to avoid circular dependency in gep, where %x = gep(%a, ...), then %a = %x
@@ -25,7 +23,7 @@ pub enum PANodeKind<'m> {
     Operand(&'m llvm_ir::Operand),
     // DerefOperand(&'m llvm_ir::Operand),
     AllocaObject {
-        function: &'m str,
+        function: String,
         dest: &'m llvm_ir::Name,
         allocated_type: &'m TypeRef,
     },
@@ -37,14 +35,14 @@ pub enum PANodeKind<'m> {
     },
 
     FormalParameter {
-        function: &'m str,
+        function: String,
         index: usize,
         name: String,
     },
 
     /// the return value of a function
     FunctionReturn {
-        function: &'m str,
+        function: String,
     },
 
     /// the function object itself
@@ -54,14 +52,14 @@ pub enum PANodeKind<'m> {
 
     /// the receiver object of a call instruction (e.g., the `self` or `this` pointer)
     ReceiverObject {
-        caller: &'m str,
+        caller: String,
         block: String,
         callsite: String,
     },
 
     /// the target of an indirect call instruction (e.g., a function pointer)
     IndirectCallTarget {
-        caller: &'m str,
+        caller: String,
         block: String,
         callsite: String,
     },
@@ -230,14 +228,19 @@ pub enum PAEdgeKind {
 
     /// dst = call(src1, src2, ...) receiver pointer changes the target of the call
     ReceiverCall { callsite_id: usize },
+
+    /// for llvm.memcpy(dst_ptr, src_ptr, size)
+    /// edge.src = src pointer
+    /// edge.dst = dst pointer
+    MemCopy,
 }
 
 #[derive(Debug, Clone)]
-pub struct PAEdge<'m> {
+pub struct PAEdge {
     pub src: PANodeId,
     pub dst: PANodeId,
     pub kind: PAEdgeKind,
-    pub function: &'m str,
+    pub function: String,
     pub block: String,
 }
 
@@ -250,7 +253,7 @@ pub enum PACallSiteKind<'m> {
 #[derive(Debug, Clone)]
 pub struct PACallSite<'m> {
     pub id: usize,
-    pub caller: &'m str,
+    pub caller: String,
     pub block: String,
     pub kind: PACallSiteKind<'m>,
 
@@ -276,8 +279,8 @@ pub enum PAWorkDelta {
 }
 
 #[derive(Debug, Clone)]
-pub struct PAWorkItem<'m> {
-    pub edge: PAEdge<'m>,
+pub struct PAWorkItem {
+    pub edge: PAEdge,
 
     /// Newly discovered points-to objects for edge.src.
     ///
@@ -303,7 +306,7 @@ pub struct PointerAssignmentGraph<'m> {
     // our created cg when on-the-fy, otherwise import from llvm-ir
     pub call_graph: CallGraph<'m>,
 
-    pub edges: Vec<PAEdge<'m>>,
+    pub edges: Vec<PAEdge>,
 
     /// callsite id -> PACallSite
     pub callsites: BTreeMap<usize, PACallSite<'m>>,
@@ -325,13 +328,16 @@ pub struct PointerAssignmentGraph<'m> {
     pub pending_functions: VecDeque<String>,
 
     /// for each iteration of Andersen's algorithm, we will discover new edges and new cgnodes
-    pub worklist: Vec<PAWorkItem<'m>>,
+    pub worklist: Vec<PAWorkItem>,
     /// node id -> all edges where this node is the source/lhs (outgoing edges)
-    pub lhs2edges: BTreeMap<PANodeId, Vec<PAEdge<'m>>>,
+    pub lhs2edges: BTreeMap<PANodeId, Vec<PAEdge>>,
 
     /// node id -> Store edges where this node is edge.dst
     /// Needed because Store depends on both src and dst.
-    pub store_dst_edges: BTreeMap<PANodeId, Vec<PAEdge<'m>>>,
+    pub store_dst_edges: BTreeMap<PANodeId, Vec<PAEdge>>,
+
+    /// node id -> MemCopy edges where this node is edge.dst, i.e., dst pointer -> memcopy edges
+    pub memcpy_dst_edges: BTreeMap<PANodeId, Vec<PAEdge>>,
 
     /// true when we do on-the-fly to compute reachable functions
     pub on_the_fly: bool,
@@ -405,6 +411,7 @@ impl<'m> PointerAssignmentGraph<'m> {
             worklist: Vec::new(),
             lhs2edges: BTreeMap::new(),
             store_dst_edges: BTreeMap::new(),
+            memcpy_dst_edges: BTreeMap::new(),
             on_the_fly: true, //TODO: pass in ?
         };
 
@@ -499,21 +506,63 @@ impl<'m> PointerAssignmentGraph<'m> {
     }
 
     /// TODO: handle special rust functions, e.g., clone()
-    pub fn handle_special_rust_functions(&mut self, function_name: &str, func: &Function) -> bool {
-        // <alloc::sync::Arc<T, A> as core::clone::Clone>::clone
-        //
-        if is_arc_clone(function_name) {}
+    pub fn handle_special_rust_functions(
+        &mut self,
+        function_name: &str,
+        block_name: &str,
+        callsite_kind: &PACallSiteKind<'m>,
+    ) -> bool {
+        // // <alloc::sync::Arc<T, A> as core::clone::Clone>::clone
+        // //
+        // if is_arc_clone(function_name) {}
+        // let func = self
+        //     .functions_by_name
+        //     .get(normalize_function_name(function_name))
+        //     .copied();
 
-        true
+        // model:
+        // declare void @llvm.memcpy.p0.p0.i64(ptr nocapture writeonly %dst,  // The starting address of the destination memory block.
+        //                            ptr nocapture readonly %src,             // The starting address of the source memory block.
+        //                            i64 %len,                                // The total number of bytes to copy from the source to the destination.
+        //                            i1 %isvolatile)
+        // copy %len bytes from memory at %src into memory at %dst
+        // create:
+        // %y -[Copy]-> %x
+        if function_name.starts_with("llvm.memcpy.") {
+            let args = self.get_callsite_arguments(&callsite_kind);
+
+            if args.len() >= 2 {
+                // llvm.memcpy(dst, src, size, volatile)
+                let dst_ptr = &args[0].0;
+                let src_ptr = &args[1].0;
+
+                // self.add_global_address_if_needed(dst_ptr, function_name, block_name);
+                // self.add_global_address_if_needed(src_ptr, function_name, block_name);
+
+                self.add_pag_edge(
+                    PANodeKind::Operand(src_ptr),
+                    PANodeKind::Operand(dst_ptr),
+                    PAEdgeKind::MemCopy,
+                    function_name.to_string(),
+                    block_name.to_string(),
+                );
+
+                debug!(
+                    "[PAG] model llvm.memcpy as MemCopy: src={:?} dst={:?}",
+                    src_ptr, dst_ptr
+                );
+
+                return true;
+            }
+        }
+
+        false
     }
 
     /// visit ir instructions and create constraints
     fn discover_constraints_in_function(&mut self, func: &'m llvm_ir::Function) {
-        let function_name = func.name.as_str();
-        // TODO:
-        // if self.handle_special_rust_functions(function_name, func) {
-        //     continue;
-        // }
+        let function_name = func.name.clone();
+
         for block in &func.basic_blocks {
             let block_name = format!("{}", block.name);
 
@@ -521,7 +570,7 @@ impl<'m> PointerAssignmentGraph<'m> {
                 match instr {
                     Instruction::Alloca(alloca) => {
                         let src = PANodeKind::AllocaObject {
-                            function: function_name,
+                            function: function_name.clone(),
                             dest: &alloca.dest,
                             allocated_type: &alloca.allocated_type,
                         };
@@ -531,7 +580,7 @@ impl<'m> PointerAssignmentGraph<'m> {
                             src,
                             dst,
                             PAEdgeKind::AddressOf,
-                            function_name,
+                            function_name.clone(),
                             block_name.clone(),
                         );
                     }
@@ -544,20 +593,20 @@ impl<'m> PointerAssignmentGraph<'m> {
                             src,
                             dst,
                             PAEdgeKind::Load,
-                            function_name,
+                            function_name.clone(),
                             block_name.clone(),
                         );
                     }
 
                     Instruction::Store(store) => {
                         let value = &store.value;
-                        self.add_global_address_if_needed(value, function_name, &block_name);
+                        self.add_global_address_if_needed(value, &function_name, &block_name);
 
                         self.add_pag_edge(
                             PANodeKind::Operand(&store.value),
                             PANodeKind::Operand(&store.address),
                             PAEdgeKind::Store,
-                            function_name,
+                            function_name.clone(),
                             block_name.clone(),
                         );
                     }
@@ -567,14 +616,18 @@ impl<'m> PointerAssignmentGraph<'m> {
                         // GlobalObject(@g)  -> GlobalAddress(@g)  [AddressOf]
                         // GlobalAddress(@g) -> Operand(@g)        [Copy]
                         // Operand(@g)       -> %gep_dest          [GEP(indices)]
-                        self.add_global_address_if_needed(&gep.address, function_name, &block_name);
+                        self.add_global_address_if_needed(
+                            &gep.address,
+                            &function_name,
+                            &block_name,
+                        );
 
                         let indices = gep_indices_as_u64(&gep.indices);
                         self.add_pag_edge(
                             PANodeKind::Operand(&gep.address),
                             PANodeKind::ValueName(&gep.dest),
                             PAEdgeKind::GEP { indices },
-                            function_name,
+                            function_name.clone(),
                             block_name.clone(),
                         );
                     }
@@ -582,7 +635,7 @@ impl<'m> PointerAssignmentGraph<'m> {
                     Instruction::BitCast(bitcast) => {
                         self.add_global_address_if_needed(
                             &bitcast.operand,
-                            function_name,
+                            &function_name,
                             &block_name,
                         );
 
@@ -590,7 +643,7 @@ impl<'m> PointerAssignmentGraph<'m> {
                             PANodeKind::Operand(&bitcast.operand),
                             PANodeKind::ValueName(&bitcast.dest),
                             PAEdgeKind::BitCast,
-                            function_name,
+                            function_name.clone(),
                             block_name.clone(),
                         );
                     }
@@ -603,7 +656,7 @@ impl<'m> PointerAssignmentGraph<'m> {
                             src,
                             dst,
                             PAEdgeKind::AddrSpaceCast,
-                            function_name,
+                            function_name.clone(),
                             block_name.clone(),
                         );
                     }
@@ -639,7 +692,7 @@ impl<'m> PointerAssignmentGraph<'m> {
                                 src,
                                 dst.clone(),
                                 PAEdgeKind::Phi,
-                                function_name,
+                                function_name.clone(),
                                 block_name.clone() + " (" + &kind + ")",
                             );
                         }
@@ -652,7 +705,7 @@ impl<'m> PointerAssignmentGraph<'m> {
                             PANodeKind::Operand(&select.true_value),
                             dst.clone(),
                             PAEdgeKind::Select, // true branch
-                            function_name,
+                            function_name.clone(),
                             block_name.clone() + " (true branch)",
                         );
 
@@ -660,13 +713,17 @@ impl<'m> PointerAssignmentGraph<'m> {
                             PANodeKind::Operand(&select.false_value),
                             dst.clone(),
                             PAEdgeKind::Select, // false branch
-                            function_name,
+                            function_name.clone(),
                             block_name.clone() + " (false branch)",
                         );
                     }
 
                     Instruction::Call(call) => {
-                        self.add_call_edges(function_name, &block_name, PACallSiteKind::Call(call));
+                        self.add_call_edges(
+                            &function_name,
+                            &block_name,
+                            PACallSiteKind::Call(call),
+                        );
                     }
 
                     _ => {
@@ -680,21 +737,26 @@ impl<'m> PointerAssignmentGraph<'m> {
 
             match &block.term {
                 llvm_ir::terminator::Terminator::Invoke(invoke) => {
-                    self.add_call_edges(function_name, &block_name, PACallSiteKind::Invoke(invoke));
+                    let function_name = func.name.clone();
+                    self.add_call_edges(
+                        &function_name,
+                        &block_name,
+                        PACallSiteKind::Invoke(invoke),
+                    );
                 }
 
                 llvm_ir::Terminator::Ret(ret) => {
                     if let Some(ret_val) = &ret.return_operand {
                         let src = PANodeKind::Operand(ret_val);
                         let dst = PANodeKind::FunctionReturn {
-                            function: function_name,
+                            function: func.name.clone(),
                         };
 
                         self.add_pag_edge(
                             src,
                             dst,
                             PAEdgeKind::Copy,
-                            function_name,
+                            func.name.clone(),
                             block_name.clone(),
                         );
                     }
@@ -721,7 +783,7 @@ impl<'m> PointerAssignmentGraph<'m> {
     fn add_global_address_if_needed(
         &mut self,
         op: &'m llvm_ir::Operand,
-        function_name: &'m str,
+        function_name: &str,
         block_name: &str,
     ) {
         let Some(global_name) = global_name_from_operand(op) else {
@@ -754,7 +816,7 @@ impl<'m> PointerAssignmentGraph<'m> {
                 },
                 address_node.clone(),
                 PAEdgeKind::AddressOf,
-                function_name,
+                function_name.to_string(),
                 block_name.to_string(),
             );
         }
@@ -766,7 +828,7 @@ impl<'m> PointerAssignmentGraph<'m> {
             PANodeKind::GlobalObject { name: global_name },
             PANodeKind::Operand(op),
             PAEdgeKind::AddressOf,
-            function_name,
+            function_name.to_string(),
             block_name.to_string(),
         );
     }
@@ -789,13 +851,13 @@ impl<'m> PointerAssignmentGraph<'m> {
                 function, index, ..
             } => self
                 .functions_by_name
-                .get(*function)
+                .get(function)
                 .and_then(|f| f.parameters.get(*index))
                 .map(|p| p.ty.clone()),
 
             PANodeKind::FunctionReturn { function } => self
                 .functions_by_name
-                .get(*function)
+                .get(function)
                 .map(|f| f.return_type.clone()),
 
             PANodeKind::ReceiverObject { .. }
@@ -888,7 +950,7 @@ impl<'m> PointerAssignmentGraph<'m> {
     /// add the new edge with lhs's pts (Store is different) to worklist
     /// edge -> newly discovered edge with no propagation
     /// we will merge delta for the same edge later in solver
-    fn enqueue_initial_edge(&mut self, edge: PAEdge<'m>) {
+    fn enqueue_initial_edge(&mut self, edge: PAEdge) {
         debug!(
             "[PAG Solver] enqueue new edge: n{} -[{:?}]-> n{}",
             edge.src, edge.kind, edge.dst
@@ -902,8 +964,8 @@ impl<'m> PointerAssignmentGraph<'m> {
                 });
             }
 
-            PAEdgeKind::Store => {
-                // Store depends on src and dst.
+            PAEdgeKind::Store | PAEdgeKind::MemCopy => {
+                // Store/MemCopy depends on src and dst.
                 let src_pts = self.points_to_snapshot(edge.src);
                 if !src_pts.is_empty() {
                     self.worklist.push(PAWorkItem {
@@ -937,7 +999,7 @@ impl<'m> PointerAssignmentGraph<'m> {
     /// check whether the edge already in self.edges;
     /// if not, update lhs2edges and add to worklist
     /// NOTE: this is for adding initial edge (before any propogation)
-    fn insert_edge(&mut self, edge: PAEdge<'m>) {
+    fn insert_edge(&mut self, edge: PAEdge) {
         if self.edges.iter().any(|e| same_edge(e, &edge)) {
             return;
         }
@@ -951,6 +1013,13 @@ impl<'m> PointerAssignmentGraph<'m> {
             PAEdgeKind::Store => {
                 // For store edges, we need to add the edge to the store_dst_edges map for the dst node
                 self.store_dst_edges
+                    .entry(edge.dst)
+                    .or_default()
+                    .push(edge.clone());
+            }
+            PAEdgeKind::MemCopy => {
+                // for MemCopy edges, ...
+                self.memcpy_dst_edges
                     .entry(edge.dst)
                     .or_default()
                     .push(edge.clone());
@@ -976,7 +1045,7 @@ impl<'m> PointerAssignmentGraph<'m> {
         src_kind: PANodeKind<'m>,
         dst_kind: PANodeKind<'m>,
         kind: PAEdgeKind,
-        function: &'m str,
+        function: String,
         block: String,
     ) {
         let src = self.get_or_create_node(src_kind);
@@ -1048,7 +1117,7 @@ impl<'m> PointerAssignmentGraph<'m> {
         }
 
         if !self.functions_by_name.contains_key(callee_name) {
-            println!(
+            debug!(
                 "enqueue_reachable_function: cannot find {} in functions_by_name.",
                 callee_name
             );
@@ -1056,11 +1125,11 @@ impl<'m> PointerAssignmentGraph<'m> {
         }
 
         if should_skip_function_body(callee_name) {
-            println!("[PAG] skip visiting function body: {}", callee_name);
+            debug!("[PAG] skip visiting function body: {}", callee_name);
             return;
         }
 
-        println!("[PAG] enqueue newly reachable function: {}", callee_name);
+        debug!("[PAG] enqueue newly reachable function: {}", callee_name);
 
         self.pending_functions.push_back(callee_name.to_string());
     }
@@ -1152,7 +1221,7 @@ impl<'m> PointerAssignmentGraph<'m> {
     /// Add actual→formal, return→lhs, and receiver/self edges.
     fn add_call_edges(
         &mut self,
-        caller_name: &'m str,
+        caller_name: &str,
         block_name: &str,
         callsite_kind: PACallSiteKind<'m>,
     ) {
@@ -1163,7 +1232,7 @@ impl<'m> PointerAssignmentGraph<'m> {
 
         let direct_callee_name = direct_callee_name(direct_callee);
         let callsite_id = self.register_callsite(
-            caller_name,
+            caller_name.to_string(),
             block_name.to_string(),
             callsite_kind.clone(),
             direct_callee_name.is_some(),
@@ -1173,6 +1242,11 @@ impl<'m> PointerAssignmentGraph<'m> {
         // 1. Direct call: make sure call graph has caller -> callee.
         // ------------------------------------------------------------
         if let Some(direct_callee_name) = direct_callee_name {
+            // handle special functions if exists
+            if self.handle_special_rust_functions(&direct_callee_name, block_name, &callsite_kind) {
+                return;
+            }
+
             let callee_func = self
                 .functions_by_name
                 .get(normalize_function_name(direct_callee_name.as_str()))
@@ -1181,7 +1255,10 @@ impl<'m> PointerAssignmentGraph<'m> {
             if let Some(callee_func) = callee_func {
                 let callee_name = callee_func.name.as_str();
 
-                if self.call_graph.add_call_edge(caller_name, callee_name) {
+                if self
+                    .call_graph
+                    .add_call_edge(caller_name.to_string(), callee_name.to_string())
+                {
                     debug!(
                         "[PAG Call] add direct call edge: {} -> {}",
                         caller_name, callee_name
@@ -1209,12 +1286,12 @@ impl<'m> PointerAssignmentGraph<'m> {
         self.add_pag_edge(
             PANodeKind::Operand(direct_callee),
             PANodeKind::IndirectCallTarget {
-                caller: caller_name,
+                caller: caller_name.to_string(),
                 block: block_name.to_string(),
                 callsite: format!("callsite_{}", callsite_id),
             },
             PAEdgeKind::IndirectCall { callsite_id },
-            caller_name,
+            caller_name.to_string(),
             block_name.to_string(),
         );
 
@@ -1234,12 +1311,12 @@ impl<'m> PointerAssignmentGraph<'m> {
             self.add_pag_edge(
                 PANodeKind::Operand(receiver_arg),
                 PANodeKind::ReceiverObject {
-                    caller: caller_name,
+                    caller: caller_name.to_string(),
                     block: block_name.to_string(),
                     callsite: format!("callsite_{}", callsite_id),
                 },
                 PAEdgeKind::ReceiverCall { callsite_id },
-                caller_name,
+                caller_name.to_string(),
                 block_name.to_string(),
             );
         }
@@ -1286,7 +1363,7 @@ impl<'m> PointerAssignmentGraph<'m> {
 
     fn add_constraints_for_call(
         &mut self,
-        caller_name: &'m str,
+        caller_name: &str,
         block_name: &str,
         callsite_kind: PACallSiteKind<'m>,
         callee: &'m llvm_ir::Function,
@@ -1303,12 +1380,12 @@ impl<'m> PointerAssignmentGraph<'m> {
                 self.add_pag_edge(
                     PANodeKind::Operand(actual_arg),
                     PANodeKind::FormalParameter {
-                        function: callee_name,
+                        function: callee_name.to_string(),
                         index: idx,
                         name: format!("{}", formal.name),
                     },
                     PAEdgeKind::Copy,
-                    caller_name,
+                    caller_name.to_string(),
                     block_name.to_string(),
                 );
             }
@@ -1332,12 +1409,12 @@ impl<'m> PointerAssignmentGraph<'m> {
                 self.add_pag_edge(
                     PANodeKind::Operand(receiver_arg),
                     PANodeKind::FormalParameter {
-                        function: callee_name,
+                        function: callee_name.to_string(),
                         index: 0,
                         name: format!("{}", formal0.name),
                     },
                     PAEdgeKind::Copy,
-                    caller_name,
+                    caller_name.to_string(),
                     block_name.to_string(),
                 );
             }
@@ -1349,11 +1426,11 @@ impl<'m> PointerAssignmentGraph<'m> {
         if let Some(result) = &result {
             self.add_pag_edge(
                 PANodeKind::FunctionReturn {
-                    function: callee_name,
+                    function: callee_name.to_string(),
                 },
                 PANodeKind::ValueName(result),
                 PAEdgeKind::Copy,
-                caller_name,
+                caller_name.to_string(),
                 block_name.to_string(),
             );
         }
@@ -1379,7 +1456,7 @@ impl<'m> PointerAssignmentGraph<'m> {
             let items = self.topo_sort_worklist(items);
 
             println!(
-                "[PAG Solver] iteration {}: nodes={}, edges={}, items={}",
+                "[PAG Solver] iteration {}: nodes={}, edges={}, worklist items={}",
                 iteration,
                 self.nodes.len(),
                 self.edges.len(),
@@ -1476,6 +1553,18 @@ impl<'m> PointerAssignmentGraph<'m> {
 
                         self.solve_receiver_call(edge, callsite_id, &delta)
                     }
+
+                    PAEdgeKind::MemCopy => match item.delta {
+                        PAWorkDelta::Src(delta) => {
+                            self.solve_memcpy_src(edge.src, edge.dst, &delta)
+                        }
+
+                        PAWorkDelta::Dst(delta) => {
+                            self.solve_memcpy_dst(edge.src, edge.dst, &delta)
+                        }
+
+                        PAWorkDelta::Full => false,
+                    },
                 };
             }
         }
@@ -1486,12 +1575,12 @@ impl<'m> PointerAssignmentGraph<'m> {
         );
     }
 
-    /// Simple sort for now:
+    /// Simple sort (not topo sort) for now:
     ///  we merge the deltas from different iterms but for the same edge
     ///
     /// TODO: Sort the given edges topologically based on their source nodes (lhs).
     ///  If there are cycles, the remaining nodes will be appended in deterministic order.
-    fn topo_sort_worklist(&self, mut items: Vec<PAWorkItem<'m>>) -> Vec<PAWorkItem<'m>> {
+    fn topo_sort_worklist(&self, mut items: Vec<PAWorkItem>) -> Vec<PAWorkItem> {
         items.sort_by(|a, b| {
             work_item_lhs(a)
                 .cmp(&work_item_lhs(b))
@@ -1558,6 +1647,16 @@ impl<'m> PointerAssignmentGraph<'m> {
             }
         }
 
+        // Memcopy edges where changed_node is dst ptr
+        if let Some(edges) = self.memcpy_dst_edges.get(&changed_node).cloned() {
+            for edge in edges {
+                self.worklist.push(PAWorkItem {
+                    edge,
+                    delta: PAWorkDelta::Dst(delta.clone()),
+                });
+            }
+        }
+
         true
     }
 
@@ -1609,7 +1708,7 @@ impl<'m> PointerAssignmentGraph<'m> {
     ///     pts(dst) += pts(o2)
     /// so, we create:
     ///     obj -[Copy]-> dst
-    fn solve_load(&mut self, edge: PAEdge<'m>, delta: &BTreeSet<PANodeId>) -> bool {
+    fn solve_load(&mut self, edge: PAEdge, delta: &BTreeSet<PANodeId>) -> bool {
         let src = edge.src;
         let dst = edge.dst;
         let mut changed = false;
@@ -1625,7 +1724,7 @@ impl<'m> PointerAssignmentGraph<'m> {
                 src: *obj,
                 dst: dst,
                 kind: PAEdgeKind::Copy,
-                function: edge.function,
+                function: edge.function.clone(),
                 block: edge.block.clone(),
             };
 
@@ -1742,6 +1841,98 @@ impl<'m> PointerAssignmentGraph<'m> {
         changed
     }
 
+    fn solve_memcpy_dst(
+        &mut self,
+        src_ptr: PANodeId,
+        _dst_ptr: PANodeId,
+        dst_obj_delta: &BTreeSet<PANodeId>,
+    ) -> bool {
+        if dst_obj_delta.is_empty() {
+            return false;
+        }
+
+        let src_objs = self.points_to_snapshot(src_ptr);
+        if src_objs.is_empty() {
+            return false;
+        }
+
+        let mut changed_any = false;
+
+        for src_obj in &src_objs {
+            if !self.object_may_hold_pointer_value(*src_obj) {
+                continue;
+            }
+
+            let src_contents = self.points_to_snapshot(*src_obj);
+            if src_contents.is_empty() {
+                continue;
+            }
+
+            for dst_obj in dst_obj_delta {
+                if !self.memcpy_may_copy_pointer_contents(*src_obj, *dst_obj) {
+                    continue;
+                }
+
+                debug!(
+                    "[PAG Solver] solve_memcpy (src): create dynamic Copy edge n{} -[Copy]-> n{}    delta={:?}",
+                    *src_obj, dst_obj, src_contents
+                );
+
+                if self.add_points_to_and_enqueue(*dst_obj, &src_contents) {
+                    changed_any = true;
+                }
+            }
+        }
+
+        changed_any
+    }
+
+    fn solve_memcpy_src(
+        &mut self,
+        _src_ptr: PANodeId,
+        dst_ptr: PANodeId,
+        src_obj_delta: &BTreeSet<PANodeId>,
+    ) -> bool {
+        if src_obj_delta.is_empty() {
+            return false;
+        }
+
+        let dst_objs = self.points_to_snapshot(dst_ptr);
+        if dst_objs.is_empty() {
+            return false;
+        }
+
+        let mut changed_any = false;
+
+        for src_obj in src_obj_delta {
+            if !self.object_may_hold_pointer_value(*src_obj) {
+                continue;
+            }
+
+            let src_contents = self.points_to_snapshot(*src_obj);
+            if src_contents.is_empty() {
+                continue;
+            }
+
+            for dst_obj in &dst_objs {
+                if !self.memcpy_may_copy_pointer_contents(*src_obj, *dst_obj) {
+                    continue;
+                }
+
+                debug!(
+                    "[PAG Solver] solve_memcpy (src): create dynamic Copy edge n{} -[Copy]-> n{}    delta={:?}",
+                    *src_obj, dst_obj, src_contents
+                );
+
+                if self.add_points_to_and_enqueue(*dst_obj, &src_contents) {
+                    changed_any = true;
+                }
+            }
+        }
+
+        changed_any
+    }
+
     fn solve_gep(
         &mut self,
         src: PANodeId,
@@ -1848,7 +2039,7 @@ impl<'m> PointerAssignmentGraph<'m> {
 
     fn solve_indirect_call(
         &mut self,
-        edge: PAEdge<'m>,
+        edge: PAEdge,
         callsite_id: usize,
         delta: &BTreeSet<PANodeId>,
     ) -> bool {
@@ -1878,7 +2069,10 @@ impl<'m> PointerAssignmentGraph<'m> {
 
             let callee_name = callee_func.name.as_str();
 
-            if self.call_graph.add_call_edge(callsite.caller, callee_name) {
+            if self
+                .call_graph
+                .add_call_edge(callsite.caller.clone(), callee_name.to_string())
+            {
                 println!(
                     "[PAG Solver] indirect call discovered: {} -> {}",
                     callsite.caller, callee_func.name
@@ -1889,7 +2083,7 @@ impl<'m> PointerAssignmentGraph<'m> {
             }
 
             self.add_constraints_for_call(
-                callsite.caller,
+                &callsite.caller,
                 &callsite.block,
                 callsite.kind,
                 callee_func,
@@ -1901,7 +2095,7 @@ impl<'m> PointerAssignmentGraph<'m> {
 
     fn solve_receiver_call(
         &mut self,
-        edge: PAEdge<'m>,
+        edge: PAEdge,
         callsite_id: usize,
         delta: &BTreeSet<PANodeId>,
     ) -> bool {
@@ -1930,7 +2124,10 @@ impl<'m> PointerAssignmentGraph<'m> {
             for callee_func in candidate_callees {
                 let callee_name = callee_func.name.as_str();
 
-                if self.call_graph.add_call_edge(callsite.caller, callee_name) {
+                if self
+                    .call_graph
+                    .add_call_edge(callsite.caller.clone(), callee_name.to_string())
+                {
                     println!(
                         "[PAG Solver] receiver call discovered: {} -> {}",
                         callsite.caller, callee_name
@@ -1941,7 +2138,7 @@ impl<'m> PointerAssignmentGraph<'m> {
                 }
 
                 self.add_constraints_for_call(
-                    callsite.caller,
+                    &callsite.caller,
                     &callsite.block,
                     callsite.kind.clone(),
                     callee_func,
@@ -2044,7 +2241,7 @@ impl<'m> PointerAssignmentGraph<'m> {
 
     fn register_callsite(
         &mut self,
-        caller: &'m str,
+        caller: String,
         block: String,
         call: PACallSiteKind<'m>,
         is_direct: bool,
@@ -2131,7 +2328,7 @@ impl<'m> PointerAssignmentGraph<'m> {
     //     changed
     // }
 
-    /// type filter
+    /// type filter for store
     fn store_may_write_pointer_value_to_object(
         &self,
         src_value: PANodeId,
@@ -2157,7 +2354,7 @@ impl<'m> PointerAssignmentGraph<'m> {
         }
     }
 
-    /// type filter
+    /// type filter for FieldObject solvers
     fn object_may_hold_pointer_value(&self, obj: PANodeId) -> bool {
         let Some(node) = self.nodes.get(&obj) else {
             return false;
@@ -2182,6 +2379,32 @@ impl<'m> PointerAssignmentGraph<'m> {
                 Some(ty) => type_may_contain_pointer(ty) || type_is_pointer_like(ty),
             },
         }
+    }
+
+    /// type filter for memcpy
+    fn memcpy_may_copy_pointer_contents(&self, src_obj: PANodeId, dst_obj: PANodeId) -> bool {
+        let src_ty = self.nodes.get(&src_obj).and_then(|n| n.ty.as_ref());
+        let dst_ty = self.nodes.get(&dst_obj).and_then(|n| n.ty.as_ref());
+
+        match (src_ty, dst_ty) {
+            // For unknown FieldObject type, reject to avoid explosion.
+            (None, _) | (_, None) => {
+                !self.is_field_object(src_obj) && !self.is_field_object(dst_obj)
+            }
+
+            (Some(src_ty), Some(dst_ty)) => {
+                type_may_contain_pointer(src_ty)
+                    && type_may_contain_pointer(dst_ty)
+                    && memcpy_object_types_compatible(src_ty, dst_ty)
+            }
+        }
+    }
+
+    fn is_field_object(&self, id: PANodeId) -> bool {
+        matches!(
+            self.nodes.get(&id).map(|n| &n.kind),
+            Some(PANodeKind::FieldObject { .. })
+        )
     }
 
     /// print the points-to sets of all nodes in the PAG to a file
@@ -2228,8 +2451,10 @@ impl<'m> PointerAssignmentGraph<'m> {
 
     /// print the PAG to a file
     pub fn print_pointer_assignment_graph(&self) -> Result<(), Box<dyn Error>> {
-        self.call_graph.print_call_graph()?;
-        println!("Wrote call graph to cg.txt");
+        if (self.on_the_fly) {
+            self.call_graph.print_call_graph()?;
+            println!("Wrote call graph to cg.txt");
+        }
 
         let mut file = File::create("pag.txt")?;
 
@@ -2288,7 +2513,7 @@ impl<'m> PointerAssignmentGraph<'m> {
         println!("=== Pointer Analysis Statistics ===");
         println!("nodes: {}", num_nodes);
         println!("constraints/edges: {}", num_edges);
-        println!("lhs_edges index entries: {}", num_lhs_index_entries);
+        println!("lhs2edges index entries: {}", num_lhs_index_entries); // TODO: update other statistics
         println!("callsites: {}", num_callsites);
         println!("discovered functions: {}", num_discovered_functions);
         println!("pending functions: {}", num_pending_functions);
@@ -2296,7 +2521,7 @@ impl<'m> PointerAssignmentGraph<'m> {
 
         self.print_node_kind_statistics();
         self.print_edge_kind_statistics();
-        self.print_vtable_function_refs();
+        // self.print_vtable_function_refs();
     }
 
     fn print_edge_kind_statistics(&self) {
@@ -2316,6 +2541,7 @@ impl<'m> PointerAssignmentGraph<'m> {
                 PAEdgeKind::Select => "Select",
                 PAEdgeKind::IndirectCall { .. } => "IndirectCall",
                 PAEdgeKind::ReceiverCall { .. } => "ReceiverCall",
+                PAEdgeKind::MemCopy => "MemCopy",
             };
 
             *counts.entry(kind).or_insert(0) += 1;
@@ -2327,6 +2553,7 @@ impl<'m> PointerAssignmentGraph<'m> {
         for (kind, count) in counts {
             println!("{}: {}", kind, count);
         }
+        println!()
     }
 
     fn print_node_kind_statistics(&self) {
@@ -2837,139 +3064,6 @@ fn should_skip_function_body(function_name: &str) -> bool {
 
     false
 }
-// fn should_skip_function_body(function_name: &str) -> bool {
-//     let name = normalize_function_name(function_name);
-
-//     // ------------------------------------------------------------
-//     // Rust destructor/drop glue
-//     // ------------------------------------------------------------
-//     if name.contains("drop_in_place") {
-//         return true;
-//     }
-
-//     // ------------------------------------------------------------
-//     // Rust allocation/deallocation internals
-//     // ------------------------------------------------------------
-//     if name.contains("alloc..alloc")
-//         || name.contains("alloc..raw_vec")
-//         || name.contains("alloc..boxed")
-//         || name.contains("alloc..vec")
-//         || name.contains("__rust_alloc")
-//         || name.contains("__rust_dealloc")
-//         || name.contains("__rust_realloc")
-//         || name.contains("__rust_alloc_zeroed")
-//     {
-//         return true;
-//     }
-
-//     // ------------------------------------------------------------
-//     // Panic/unwind/abort machinery
-//     // ------------------------------------------------------------
-//     if name.contains("panic")
-//         || name.contains("unwrap_failed")
-//         || name.contains("begin_panic")
-//         || name.contains("panicking")
-//         || name.contains("rust_begin_unwind")
-//         || name.contains("_Unwind_")
-//         || name.contains("__rust_start_panic")
-//         || name.contains("panic_bounds_check")
-//         || name.contains("panic_fmt")
-//         || name.contains("panic_nounwind")
-//     {
-//         return true;
-//     }
-
-//     // ------------------------------------------------------------
-//     // Formatting/debug/display machinery
-//     // Usually huge and rarely useful for application pointer flow.
-//     // ------------------------------------------------------------
-//     if name.contains("core..fmt")
-//         || name.contains("alloc..fmt")
-//         || name.contains("fmt..Formatter")
-//         || name.contains("Arguments")
-//         || name.contains("Display")
-//         || name.contains("Debug")
-//     {
-//         return true;
-//     }
-
-//     // ------------------------------------------------------------
-//     // Iterator adapter internals
-//     // Often very noisy in optimized Rust IR.
-//     // Be careful: skip only if your target is not iterator logic.
-//     // ------------------------------------------------------------
-//     if name.contains("core..iter..adapters")
-//         || name.contains("core..slice..iter")
-//         || name.contains("Iterator")
-//         || name.contains("next17h")
-//     {
-//         return true;
-//     }
-
-//     // ------------------------------------------------------------
-//     // Slice/string/str utility internals
-//     // Skip if you do not care about standard-library string internals.
-//     // ------------------------------------------------------------
-//     if name.contains("core..str")
-//         || name.contains("alloc..string")
-//         || name.contains("alloc..str")
-//         || name.contains("core..slice")
-//     {
-//         return true;
-//     }
-
-//     // // ------------------------------------------------------------
-//     // // HashMap/HashSet internals.
-//     // // Be careful: if your analysis target is map aliasing, do NOT skip these.
-//     // // ------------------------------------------------------------
-//     // if name.contains("hashbrown")
-//     //     || name.contains("std..collections..hash..map")
-//     //     || name.contains("alloc..collections")
-//     // {
-//     //     return true;
-//     // }
-
-//     // // ------------------------------------------------------------
-//     // // Synchronization primitive internals.
-//     // // Be careful: if your target is Arc/Mutex/RwLock behavior, do NOT skip.
-//     // // ------------------------------------------------------------
-//     // if name.contains("alloc..sync..Arc")
-//     //     || name.contains("std..sync")
-//     //     || name.contains("parking_lot")
-//     //     || name.contains("lock_api")
-//     // {
-//     //     return true;
-//     // }
-
-//     // ------------------------------------------------------------
-//     // Compiler intrinsics / LLVM intrinsics / sanitizer-ish functions.
-//     // ------------------------------------------------------------
-//     if name.starts_with("llvm.")
-//         || name.starts_with("core..intrinsics")
-//         || name.contains("llvm.")
-//         || name.contains("memcpy")
-//         || name.contains("memmove")
-//         || name.contains("memset")
-//     {
-//         return true;
-//     }
-
-//     // ------------------------------------------------------------
-//     // Rust runtime/language items
-//     // ------------------------------------------------------------
-//     if name.contains("lang_start")
-//         || name.contains("call_once")
-//         // || name.contains("__rust")
-//         // || name.contains("std..rt")
-//         // || name.contains("std..sys")
-//         || name.contains("std..panicking")
-//     // || name.contains("core..ops..function..FnOnce")
-//     {
-//         return true;
-//     }
-
-//     false
-// }
 
 /// process vtables from global variable to find function references in constant tables
 fn collect_vtable_functions<'m>(
@@ -3148,4 +3242,15 @@ fn same_edge(a: &PAEdge, b: &PAEdge) -> bool {
     a.src == b.src && a.dst == b.dst && a.kind == b.kind
     // && a.function == b.function
     // && a.block == b.block
+}
+
+fn memcpy_object_types_compatible(src_ty: &llvm_ir::TypeRef, dst_ty: &llvm_ir::TypeRef) -> bool {
+    // Same object type: definitely okay.
+    if format!("{:?}", src_ty) == format!("{:?}", dst_ty) {
+        return true;
+    }
+
+    // Opaque pointers make exact checking hard.
+    // If both may contain pointers, allow conservatively.
+    type_may_contain_pointer(src_ty) && type_may_contain_pointer(dst_ty)
 }

@@ -140,12 +140,18 @@ impl<'m> CallGraph<'m> {
             .neighbors_directed(func_name, Direction::Outgoing)
     }
 
-    pub fn has_call_edge(&self, caller: &str, callee: &str) -> bool {
-        self.graph.contains_edge(caller, callee)
+    pub fn has_call_edge(&self, caller: String, callee: String) -> bool {
+        self.graph.contains_edge(&caller, &callee)
     }
 
-    pub fn add_call_edge(&mut self, caller: &'m str, callee: &'m str) -> bool {
-        if self.graph.contains_edge(caller, callee) {
+    pub fn add_call_edge(&mut self, caller: String, callee: String) -> bool {
+        // leak string through Box::leak
+        // TODO: this is just a bypass ...
+        //   i dont have lifetime for edges in pag
+        let caller: &'static str = Box::leak(caller.into_boxed_str());
+        let callee: &'static str = Box::leak(callee.into_boxed_str());
+
+        if self.graph.contains_edge(&caller, &callee) {
             return false;
         }
 

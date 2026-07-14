@@ -131,12 +131,20 @@ FunctionReturn(...) -> ValueName(dest) Copy
 
 
 
+## special Rust fuctions (in `handle_special_rust_functions`)
+- memcpy (done)
+
+
+
+
 
 ## TODO: 
 - model the other edges (bitcast, phi, select) -> currently just simple copy (done)
 - performance 
   - skip visiting certain functions: see console output "[PAG] enqueue newly reachable function xxx" (done)
     - e.g., _ZN4core3cmp6min_by17ha4cfc0b0d5a7f758E
+  - handle special rust functions
+    - e.g., memcpy 
   - adhoc for tokio and certain functions (skip the long and unnecessary callchain and their constraints) 
     - but make sure we can still reach our closures, e.g., _ZN4main16spawn_user_query28_$u7b$$u7b$closure$u7d$$u7d$17hb7b958eb69c4a9bcE
 
