@@ -15,6 +15,7 @@ use std::time::Instant;
 /// field-sensitive: to avoid circular dependency in gep, where %x = gep(%a, ...), then %a = %x
 /// then there will be infinite fieldobject created in this loop
 const MAX_FIELD_DEPTH: usize = 2;
+const SUMMARY_FIELD: u64 = u64::MAX; // collapse
 
 pub type PANodeId = usize;
 
@@ -865,11 +866,12 @@ impl<'m> PointerAssignmentGraph<'m> {
 
         if field.len() > MAX_FIELD_DEPTH {
             debug!(
-                "[PAG GEP] field path too deep; collapse to root base: root=n{} field={:?}",
+                "[PAG GEP] field path too deep; truncate extra indices: root=n{} field={:?}",
                 root_base, field
             );
 
-            return root_base;
+            field.truncate(MAX_FIELD_DEPTH);
+            field.push(SUMMARY_FIELD);
         }
 
         let field_type = root_ty
@@ -1747,16 +1749,25 @@ impl<'m> PointerAssignmentGraph<'m> {
         indices: &[u64],
         delta: &BTreeSet<PANodeId>,
     ) -> bool {
+        if delta.is_empty() {
+            return false;
+        }
+
         let mut out = BTreeSet::new();
 
         for base_obj in delta {
             let field_obj = self.get_or_create_field_object(*base_obj, indices);
-            out.insert(field_obj);
+
+            if !self.object_may_hold_pointer_value(field_obj) {
+                continue;
+            }
 
             debug!(
                 "[PAG Solver] solve_gep: create field objects: {:?}    delta={:?}",
                 field_obj, delta
             );
+
+            out.insert(field_obj);
         }
 
         self.add_points_to_and_enqueue(dst, &out)
@@ -2148,11 +2159,27 @@ impl<'m> PointerAssignmentGraph<'m> {
 
     /// type filter
     fn object_may_hold_pointer_value(&self, obj: PANodeId) -> bool {
-        let obj_ty = self.nodes.get(&obj).and_then(|n| n.ty.as_ref());
+        let Some(node) = self.nodes.get(&obj) else {
+            return false;
+        };
 
-        match obj_ty {
-            None => true,
-            Some(ty) => type_may_contain_pointer(ty),
+        match &node.kind {
+            PANodeKind::FieldObject { field_type, .. } => {
+                match field_type {
+                    Some(ty) => type_may_contain_pointer(ty) || type_is_pointer_like(ty),
+                    None => {
+                        // Important performance choice:
+                        // Unknown field type in Rust library internals causes explosion.
+                        // Be conservative only for application objects if needed.
+                        false
+                    }
+                }
+            }
+
+            _ => match node.ty.as_ref() {
+                None => true,
+                Some(ty) => type_may_contain_pointer(ty) || type_is_pointer_like(ty),
+            },
         }
     }
 
