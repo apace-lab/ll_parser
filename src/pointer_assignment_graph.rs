@@ -2164,6 +2164,7 @@ impl<'m> PointerAssignmentGraph<'m> {
         };
 
         match &node.kind {
+            // Do not create FieldObject for unknown/non-pointer fields
             PANodeKind::FieldObject { field_type, .. } => {
                 match field_type {
                     Some(ty) => type_may_contain_pointer(ty) || type_is_pointer_like(ty),
