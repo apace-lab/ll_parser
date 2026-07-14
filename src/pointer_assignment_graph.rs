@@ -90,7 +90,6 @@ pub struct PANode<'m> {
     pub ty: Option<llvm_ir::TypeRef>,
 
     pub points_to: BTreeSet<PANodeId>,
-    pub diff: BTreeSet<PANodeId>,
 }
 
 impl<'m> PANode<'m> {
@@ -100,7 +99,6 @@ impl<'m> PANode<'m> {
             kind,
             ty,
             points_to: BTreeSet::new(),
-            diff: BTreeSet::new(),
         }
     }
 
@@ -259,6 +257,36 @@ pub struct PACallSite<'m> {
     pub is_direct: bool,
 }
 
+/// For other edge types, change is from Src(delta).
+/// but special for store:
+///  Store with Src(delta)   // src got new pointer values
+///  Store with Dst(delta)   // dst got new target objects
+#[derive(Debug, Clone)]
+pub enum PAWorkDelta {
+    /// edge.src received these newly added pointees.
+    Src(BTreeSet<PANodeId>),
+
+    /// edge.dst received these newly added pointees.
+    /// Mainly for Store: *dst = src.
+    Dst(BTreeSet<PANodeId>),
+
+    /// Used for AddressOf or special seed events.
+    Full,
+}
+
+#[derive(Debug, Clone)]
+pub struct PAWorkItem<'m> {
+    pub edge: PAEdge<'m>,
+
+    /// Newly discovered points-to objects for edge.src.
+    ///
+    /// For most edges, this means:
+    ///   delta = new pointees of edge.src
+    ///
+    /// For Store, we may need special handling because both src and dst matter.
+    pub delta: PAWorkDelta,
+}
+
 // #[derive(Debug, Clone)]
 pub struct PointerAssignmentGraph<'m> {
     pub modules: Vec<&'m Module>,
@@ -296,9 +324,13 @@ pub struct PointerAssignmentGraph<'m> {
     pub pending_functions: VecDeque<String>,
 
     /// for each iteration of Andersen's algorithm, we will discover new edges and new cgnodes
-    pub worklist: Vec<PAEdge<'m>>,
+    pub worklist: Vec<PAWorkItem<'m>>,
     /// node id -> all edges where this node is the source/lhs (outgoing edges)
-    pub lhs2edges: HashMap<PANodeId, Vec<PAEdge<'m>>>,
+    pub lhs2edges: BTreeMap<PANodeId, Vec<PAEdge<'m>>>,
+
+    /// node id -> Store edges where this node is edge.dst
+    /// Needed because Store depends on both src and dst.
+    pub store_dst_edges: BTreeMap<PANodeId, Vec<PAEdge<'m>>>,
 
     /// true when we do on-the-fly to compute reachable functions
     pub on_the_fly: bool,
@@ -370,7 +402,8 @@ impl<'m> PointerAssignmentGraph<'m> {
             visited_functions: BTreeSet::new(),
             pending_functions: VecDeque::new(),
             worklist: Vec::new(),
-            lhs2edges: HashMap::new(),
+            lhs2edges: BTreeMap::new(),
+            store_dst_edges: BTreeMap::new(),
             on_the_fly: true, //TODO: pass in ?
         };
 
@@ -385,7 +418,6 @@ impl<'m> PointerAssignmentGraph<'m> {
         // discover new constraints and solve until fixed point
         // pag.discover_all_constraints();
         pag.discover_reachable_constraints();
-        pag.worklist.append(&mut pag.edges.clone());
         while pag.worklist.len() > 0 {
             println!(
                 "PointerAssignmentGraph::new: discovered {} new edges in worklist",
@@ -843,72 +875,89 @@ impl<'m> PointerAssignmentGraph<'m> {
         })
     }
 
-    fn same_edge(&self, a: &PAEdge<'m>, b: &PAEdge<'m>) -> bool {
-        a.src == b.src && a.dst == b.dst && a.kind == b.kind
-        // && a.function == b.function
-        // && a.block == b.block
-    }
+    /// add the new edge with lhs's pts (Store is different) to worklist
+    /// edge -> newly discovered edge with no propagation
+    /// we will merge delta for the same edge later in solver
+    fn enqueue_initial_edge(&mut self, edge: PAEdge<'m>) {
+        debug!(
+            "[PAG Solver] enqueue new edge: n{} -[{:?}]-> n{}",
+            edge.src, edge.kind, edge.dst
+        );
 
-    /// Add a new edge to the worklist if it is not already present.
-    fn add_to_worklist(&mut self, edge: PAEdge<'m>) -> bool {
-        let already_queued = self.worklist.iter().any(|e| self.same_edge(e, &edge));
+        match edge.kind {
+            PAEdgeKind::AddressOf => {
+                self.worklist.push(PAWorkItem {
+                    edge,
+                    delta: PAWorkDelta::Full,
+                });
+            }
 
-        if !already_queued {
-            debug!(
-                "[PAG Solver] enqueue new edge: n{} -[{:?}]-> n{}",
-                edge.src, edge.kind, edge.dst
-            );
+            PAEdgeKind::Store => {
+                // Store depends on src and dst.
+                let src_pts = self.points_to_snapshot(edge.src);
+                if !src_pts.is_empty() {
+                    self.worklist.push(PAWorkItem {
+                        edge: edge.clone(),
+                        delta: PAWorkDelta::Src(src_pts),
+                    });
+                }
 
-            self.worklist.push(edge);
+                let dst_pts = self.points_to_snapshot(edge.dst);
+                if !dst_pts.is_empty() {
+                    self.worklist.push(PAWorkItem {
+                        edge,
+                        delta: PAWorkDelta::Dst(dst_pts),
+                    });
+                }
+            }
+
+            _ => {
+                // all other types of edges
+                let src_pts = self.points_to_snapshot(edge.src);
+                if !src_pts.is_empty() {
+                    self.worklist.push(PAWorkItem {
+                        edge,
+                        delta: PAWorkDelta::Src(src_pts),
+                    });
+                }
+            }
         }
-
-        !already_queued
-    }
-
-    /// Given a node that has changed (i.e., its points-to set has changed), find all edges where this node is the source/lhs and return them.
-    fn get_edges_with_lhs(&mut self, changed_node: PANodeId) -> Vec<PAEdge<'m>> {
-        let Some(edges) = self.lhs2edges.get(&changed_node) else {
-            return Vec::new();
-        };
-
-        let edges: Vec<PAEdge<'m>> = edges.clone();
-
-        edges
     }
 
     /// check whether the edge already in self.edges;
     /// if not, update lhs2edges and add to worklist
-    fn insert_edge(&mut self, edge: PAEdge<'m>) -> bool {
-        let already_exists = self.edges.iter().any(|e| self.same_edge(e, &edge));
-
-        if !already_exists {
-            debug!(
-                "insert_edge: adding new edge n{} -[{:?}]-> n{} in function={} block={}",
-                edge.src, edge.kind, edge.dst, edge.function, edge.block
-            );
-
-            match edge.kind {
-                PAEdgeKind::Store => {
-                    // For store edges, we need to add the edge to the lhs2edges map for the dst node
-                    self.lhs2edges
-                        .entry(edge.dst)
-                        .or_default()
-                        .push(edge.clone());
-                }
-                _ => {
-                    // For all other edges, we add the edge to the lhs2edges map for the src node
-                    self.lhs2edges
-                        .entry(edge.src)
-                        .or_default()
-                        .push(edge.clone());
-                }
-            }
-
-            self.edges.push(edge.clone());
+    /// NOTE: this is for adding initial edge (before any propogation)
+    fn insert_edge(&mut self, edge: PAEdge<'m>) {
+        if self.edges.iter().any(|e| same_edge(e, &edge)) {
+            return;
         }
 
+        debug!(
+            "insert_edge: adding new edge n{} -[{:?}]-> n{} in function={} block={}",
+            edge.src, edge.kind, edge.dst, edge.function, edge.block
+        );
+
+        match edge.kind {
+            PAEdgeKind::Store => {
+                // For store edges, we need to add the edge to the store_dst_edges map for the dst node
+                self.store_dst_edges
+                    .entry(edge.dst)
+                    .or_default()
+                    .push(edge.clone());
+            }
+            _ => {
+                // For all other edges, we add the edge to the lhs2edges map for the src node
+                self.lhs2edges
+                    .entry(edge.src)
+                    .or_default()
+                    .push(edge.clone());
+            }
+        }
+
+        self.edges.push(edge.clone());
+
         // Also seed it into the worklist.
-        self.add_to_worklist(edge)
+        self.enqueue_initial_edge(edge);
     }
 
     /// create and add the pag edge if not exist
@@ -1309,52 +1358,88 @@ impl<'m> PointerAssignmentGraph<'m> {
 
             iteration += 1;
 
-            // move the new edges to a local variable and clear the worklist
-            let edges = std::mem::take(&mut self.worklist);
-
             // sort the edges topologically based on their source nodes (lhs)
-            let edges = self.topo_sort_worklist(edges);
+            let items: Vec<PAWorkItem> = self.worklist.drain(..).collect();
+            let items = self.topo_sort_worklist(items);
 
             println!(
-                "[PAG Solver] iteration {}: nodes={}, edges={}",
+                "[PAG Solver] iteration {}: nodes={}, edges={}, items={}",
                 iteration,
                 self.nodes.len(),
                 self.edges.len(),
+                items.len(),
             );
 
-            for edge in edges {
+            for item in items {
+                let edge = item.edge;
+
+                debug!(
+                    "[PAG Solver] process item: n{} -[{:?}]-> n{} delta={:?}",
+                    edge.src, edge.kind, edge.dst, item.delta,
+                );
+
                 match edge.kind {
-                    PAEdgeKind::AddressOf => self.solve_address_of(edge),
+                    PAEdgeKind::AddressOf => self.solve_address_of(edge.src, edge.dst),
 
-                    PAEdgeKind::Copy => self.solve_copy(edge),
+                    PAEdgeKind::Copy => {
+                        let PAWorkDelta::Src(delta) = item.delta else {
+                            continue;
+                        };
 
-                    PAEdgeKind::Load => self.solve_load(edge),
+                        self.solve_copy(edge.src, edge.dst, &delta)
+                    }
 
-                    PAEdgeKind::Store => self.solve_store(edge),
+                    PAEdgeKind::Load => {
+                        let PAWorkDelta::Src(delta) = item.delta else {
+                            continue;
+                        };
 
-                    PAEdgeKind::GEP { indices } => self.solve_gep(edge.src, edge.dst, &indices),
+                        self.solve_load(edge, &delta)
+                    }
+
+                    PAEdgeKind::Store => match item.delta {
+                        PAWorkDelta::Src(delta) => self.solve_store_src(edge.src, edge.dst, &delta),
+
+                        PAWorkDelta::Dst(delta) => self.solve_store_dst(edge.src, edge.dst, &delta),
+
+                        PAWorkDelta::Full => false,
+                    },
+
+                    PAEdgeKind::GEP { ref indices } => {
+                        let PAWorkDelta::Src(delta) = item.delta else {
+                            continue;
+                        };
+
+                        self.solve_gep(edge.src, edge.dst, indices, &delta)
+                    }
 
                     PAEdgeKind::IndirectCall { callsite_id } => {
-                        self.solve_indirect_call(edge, callsite_id)
+                        let PAWorkDelta::Src(delta) = item.delta else {
+                            continue;
+                        };
+
+                        self.solve_indirect_call(edge, callsite_id, &delta)
                     }
 
                     PAEdgeKind::ReceiverCall { callsite_id } => {
-                        self.solve_receiver_call(edge, callsite_id)
+                        let PAWorkDelta::Src(delta) = item.delta else {
+                            continue;
+                        };
+
+                        self.solve_receiver_call(edge, callsite_id, &delta)
                     }
 
                     _ => {
                         // For other edge kinds, we do conservative Copy for now.
                         // We can extend this match statement to handle other edge kinds as needed.
+                        let PAWorkDelta::Src(delta) = item.delta else {
+                            continue;
+                        };
 
-                        self.solve_copy(edge)
+                        self.solve_copy(edge.src, edge.dst, &delta)
                     }
                 };
             }
-
-            // After this iteration, all current diffs have been considered.
-            // New diffs created during this iteration already caused new_edges
-            // to be enqueued for the next iteration.
-            self.clear_all_diffs();
         }
 
         println!(
@@ -1363,117 +1448,79 @@ impl<'m> PointerAssignmentGraph<'m> {
         );
     }
 
-    /// Sort the given edges topologically based on their source nodes (lhs). If there are cycles, the remaining nodes will be appended in deterministic order.
-    fn topo_sort_worklist(&self, edges: Vec<PAEdge<'m>>) -> Vec<PAEdge<'m>> {
-        // let edges = self.dedup_edges(edges); -> should not see duplicate edges here
+    /// Simple sort for now:
+    ///  we merge the deltas from different iterms but for the same edge
+    ///
+    /// TODO: Sort the given edges topologically based on their source nodes (lhs).
+    ///  If there are cycles, the remaining nodes will be appended in deterministic order.
+    fn topo_sort_worklist(&self, mut items: Vec<PAWorkItem<'m>>) -> Vec<PAWorkItem<'m>> {
+        items.sort_by(|a, b| {
+            work_item_lhs(a)
+                .cmp(&work_item_lhs(b))
+                .then_with(|| {
+                    edge_kind_sort_key(&a.edge.kind).cmp(&edge_kind_sort_key(&b.edge.kind))
+                })
+                .then_with(|| a.edge.src.cmp(&b.edge.src))
+                .then_with(|| a.edge.dst.cmp(&b.edge.dst))
+                .then_with(|| delta_kind_rank(&a.delta).cmp(&delta_kind_rank(&b.delta)))
+        });
 
-        // Group edges by lhs/source node.
-        let mut edges_by_lhs: BTreeMap<PANodeId, Vec<PAEdge<'m>>> = BTreeMap::new();
+        merge_sorted_work_items(items)
+    }
 
-        for edge in edges {
-            // handle special case for Store edges, where the lhs is the dst node
-            if let PAEdgeKind::Store = edge.kind {
-                edges_by_lhs.entry(edge.dst).or_default().push(edge);
-            } else {
-                edges_by_lhs.entry(edge.src).or_default().push(edge);
+    fn add_points_to_facts(
+        &mut self,
+        node: PANodeId,
+        diff: &BTreeSet<PANodeId>,
+    ) -> BTreeSet<PANodeId> {
+        let Some(n) = self.nodes.get_mut(&node) else {
+            return BTreeSet::new();
+        };
+
+        let mut delta = BTreeSet::new();
+
+        for p in diff {
+            if n.points_to.insert(*p) {
+                delta.insert(*p);
             }
         }
 
-        // Build dependency graph between lhs nodes.
-        //
-        // If we have an edge:
-        //
-        //     src -> dst
-        //
-        // and dst is also used as lhs of some other edge, then process src's
-        // group before dst's group.
-        let lhs_nodes: BTreeSet<PANodeId> = edges_by_lhs.keys().copied().collect();
+        delta
+    }
 
-        let mut succs: BTreeMap<PANodeId, BTreeSet<PANodeId>> = BTreeMap::new();
-        let mut indegree: BTreeMap<PANodeId, usize> = BTreeMap::new();
-
-        for lhs in &lhs_nodes {
-            succs.entry(*lhs).or_default();
-            indegree.entry(*lhs).or_insert(0);
+    fn add_points_to_and_enqueue(
+        &mut self,
+        changed_node: PANodeId,
+        diff: &BTreeSet<PANodeId>,
+    ) -> bool {
+        let delta = self.add_points_to_facts(changed_node, diff);
+        if delta.is_empty() {
+            return false;
         }
 
-        for (lhs, group) in &edges_by_lhs {
-            for edge in group {
-                // For Store edges, the lhs is the dst node, so we need to check if the src node is also a lhs of some other edge.
-                let rhs = match edge.kind {
-                    PAEdgeKind::Store => edge.src,
-                    _ => edge.dst,
-                };
+        debug!("    delta = {:?}", delta);
 
-                if lhs_nodes.contains(&rhs) && *lhs != rhs {
-                    let inserted = succs.entry(*lhs).or_default().insert(rhs);
-
-                    if inserted {
-                        *indegree.entry(rhs).or_insert(0) += 1;
-                    }
-                }
-            }
-        }
-
-        // Kahn topological sort.
-        let mut queue = VecDeque::new();
-
-        for (node, deg) in &indegree {
-            if *deg == 0 {
-                queue.push_back(*node);
-            }
-        }
-
-        let mut topo_order = Vec::new();
-        let mut visited = BTreeSet::new();
-
-        while let Some(node) = queue.pop_front() {
-            if !visited.insert(node) {
-                continue;
-            }
-
-            topo_order.push(node);
-
-            if let Some(nexts) = succs.get(&node) {
-                for succ in nexts {
-                    if let Some(deg) = indegree.get_mut(succ) {
-                        *deg -= 1;
-
-                        if *deg == 0 {
-                            queue.push_back(*succ);
-                        }
-                    }
-                }
-            }
-        }
-
-        // If there are cycles, append remaining lhs nodes in deterministic order.
-        for lhs in &lhs_nodes {
-            if !visited.contains(lhs) {
-                topo_order.push(*lhs);
-            }
-        }
-
-        // Reconstruct sorted edge list.
-        let mut sorted_edges: Vec<PAEdge<'m>> = Vec::new();
-
-        for lhs in topo_order {
-            if let Some(mut group) = edges_by_lhs.remove(&lhs) {
-                group.sort_by_key(|edge| {
-                    (
-                        edge.src,
-                        edge.dst,
-                        edge.kind.clone(),
-                        edge.function.clone(),
-                        edge.block.clone(),
-                    )
+        // most edges where changed_node is src/lhs.
+        if let Some(edges) = self.lhs2edges.get(&changed_node).cloned() {
+            for edge in edges {
+                self.worklist.push(PAWorkItem {
+                    edge,
+                    delta: PAWorkDelta::Src(delta.clone()),
                 });
-
-                sorted_edges.extend(group);
             }
         }
 
-        sorted_edges
+        // Store edges where changed_node is dst pointer.
+        if let Some(edges) = self.store_dst_edges.get(&changed_node).cloned() {
+            for edge in edges {
+                self.worklist.push(PAWorkItem {
+                    edge,
+                    delta: PAWorkDelta::Dst(delta.clone()),
+                });
+            }
+        }
+
+        true
     }
 
     /// Address-of constraint:
@@ -1482,22 +1529,14 @@ impl<'m> PointerAssignmentGraph<'m> {
     ///     src -[AddressOf]-> dst
     /// So:
     ///     pts(dst) += {src}
-    fn solve_address_of(&mut self, edge: PAEdge<'m>) -> bool {
-        let src = edge.src;
-        let dst = edge.dst;
-        let changed = self.insert_points_to(dst, src);
-        if changed {
-            debug!(
-                "[PAG Solver] solve_address_of: pts(n{}) += {{n{}}} (changed={})",
-                dst, src, changed
-            );
+    fn solve_address_of(&mut self, src: PANodeId, dst: PANodeId) -> bool {
+        debug!(
+            "[PAG Solver] solve_address_of: pts(n{}) += {{n{}}}",
+            dst, src
+        );
 
-            let edges = self.get_edges_with_lhs(dst);
-            for edge in edges {
-                self.add_to_worklist(edge);
-            }
-        }
-        changed
+        let pts = BTreeSet::from([src]);
+        self.add_points_to_and_enqueue(dst, &pts)
     }
 
     /// Copy constraint:
@@ -1506,30 +1545,17 @@ impl<'m> PointerAssignmentGraph<'m> {
     ///    src -[Copy]-> dst
     /// So:
     ///     pts(dst) += pts(src)
-    fn solve_copy(&mut self, edge: PAEdge<'m>) -> bool {
-        let src = edge.src;
-        let dst = edge.dst;
-        let src_diff = self.diff_snapshot(src);
-        if src_diff.is_empty() {
-            return false;
-        }
-
-        let delta = self.union_points_to_collect_delta(dst, &src_diff);
+    fn solve_copy(&mut self, src: PANodeId, dst: PANodeId, delta: &BTreeSet<PANodeId>) -> bool {
         if delta.is_empty() {
             return false;
         }
 
         debug!(
-            "[PAG Solver] solve_copy: pts(n{}) += pts(n{}) (changed={:?})",
+            "[PAG Solver] solve_copy: pts(n{}) += pts(n{})    delta={:?}",
             dst, src, delta
         );
 
-        let edges = self.get_edges_with_lhs(dst);
-        for edge in edges {
-            self.add_to_worklist(edge);
-        }
-
-        true
+        self.add_points_to_and_enqueue(dst, delta)
     }
 
     /// Load constraint:
@@ -1545,17 +1571,12 @@ impl<'m> PointerAssignmentGraph<'m> {
     ///     pts(dst) += pts(o2)
     /// so, we create:
     ///     obj -[Copy]-> dst
-    fn solve_load(&mut self, edge: PAEdge<'m>) -> bool {
+    fn solve_load(&mut self, edge: PAEdge<'m>, delta: &BTreeSet<PANodeId>) -> bool {
         let src = edge.src;
         let dst = edge.dst;
-        let src_diff = self.diff_snapshot(src);
-        if src_diff.is_empty() {
-            return false;
-        }
-
         let mut changed = false;
 
-        for obj in src_diff.iter() {
+        for obj in delta {
             if !self.object_may_hold_pointer_value(*obj) {
                 continue;
             }
@@ -1570,19 +1591,27 @@ impl<'m> PointerAssignmentGraph<'m> {
                 block: edge.block.clone(),
             };
 
-            if self.insert_edge(edge) {
-                debug!(
-                    "[PAG Solver] solve_load: create new Copy edge n{} -[Copy]-> n{} (changed={:?})",
-                    obj, dst, src_diff
-                );
-
-                let edges = self.get_edges_with_lhs(dst);
-                for edge in edges {
-                    self.add_to_worklist(edge);
-                }
-
-                changed = true;
+            if self.edges.iter().any(|e| same_edge(e, &edge)) {
+                continue;
             }
+
+            // insert dynamic copy edge
+            self.lhs2edges.entry(src).or_default().push(edge.clone());
+            self.edges.push(edge.clone());
+
+            let seed_delta = self.points_to_snapshot(src);
+            if !seed_delta.is_empty() {
+                debug!(
+                "[PAG Solver] solve_load: create dynamic Copy edge n{} -[Copy]-> n{}    delta={:?}",
+                obj, dst, seed_delta);
+
+                self.worklist.push(PAWorkItem {
+                    edge,
+                    delta: PAWorkDelta::Src(seed_delta),
+                });
+            }
+
+            changed = true;
         }
 
         changed
@@ -1602,116 +1631,107 @@ impl<'m> PointerAssignmentGraph<'m> {
     /// so, we create:
     ///     src -[Copy]-> obj
     /// !!! NOTE: this is the only case where dst is lhs, be careful
-    fn solve_store(&mut self, edge: PAEdge<'m>) -> bool {
-        let src = edge.src;
-        let dst = edge.dst;
-        let src_diff = self.diff_snapshot(src);
-        let dst_diff = self.diff_snapshot(dst);
-        let dst_pts = self.points_to_snapshot(dst);
-        let mut changed = false;
-
-        // Case A:
-        // dst newly points to some object obj.
-        // Then the existing src values should flow to obj.
-        for obj in dst_diff.iter() {
-            if !self.store_may_write_pointer_value_to_object(src, *obj) {
-                continue;
-            }
-
-            // For *dst = src and obj ∈ pts(dst),
-            // create src -[Copy]-> obj.
-            let edge = PAEdge {
-                src: src,
-                dst: *obj,
-                kind: PAEdgeKind::Copy,
-                function: edge.function,
-                block: edge.block.clone(),
-            };
-
-            if self.insert_edge(edge) {
-                debug!(
-                    "[PAG Solver] solve_store: create new Copy edge n{} -[Copy]-> n{} (dst changed={:?})",
-                    src, obj, dst_diff
-                );
-
-                let edges = self.get_edges_with_lhs(*obj);
-                for edge in edges {
-                    self.add_to_worklist(edge);
-                }
-
-                changed = true;
-            }
+    /// when pts(dst) changes:
+    /// dst newly points to some object obj.
+    /// Then the existing src values should flow to obj.
+    fn solve_store_dst(
+        &mut self,
+        src: PANodeId,
+        _dst: PANodeId,
+        dst_delta: &BTreeSet<PANodeId>,
+    ) -> bool {
+        if dst_delta.is_empty() {
+            return false;
         }
 
-        // Case B:
-        // src has new values, and dst already points to objects.
-        // The already-created copy edges src -> obj will propagate src.diff.
-        //
-        // However, if those copy edges were not created before, make sure they exist.
-        if !src_diff.is_empty() {
-            for obj in dst_pts {
-                if !self.store_may_write_pointer_value_to_object(src, obj) {
-                    continue;
-                }
-
-                let edge = PAEdge {
-                    src: src,
-                    dst: obj,
-                    kind: PAEdgeKind::Copy,
-                    function: edge.function,
-                    block: edge.block.clone(),
-                };
-
-                if self.insert_edge(edge) {
-                    debug!(
-                    "[PAG Solver] solve_store: create new Copy edge n{} -[Copy]-> n{} (src changed={:?})",
-                    src, obj, src_diff);
-
-                    let edges = self.get_edges_with_lhs(obj);
-                    for edge in edges {
-                        self.add_to_worklist(edge);
-                    }
-
-                    changed = true;
-                }
-            }
-        }
-
-        changed
-    }
-
-    fn solve_gep(&mut self, src: PANodeId, dst: PANodeId, indices: &[u64]) -> bool {
-        let base_objects = self.diff_snapshot(src);
-        if base_objects.is_empty() {
+        let src_pts = self.points_to_snapshot(src);
+        if src_pts.is_empty() {
             return false;
         }
 
         let mut changed = false;
 
-        for base_obj in base_objects.iter() {
-            let field_obj = self.get_or_create_field_object(*base_obj, indices);
-
-            if self.insert_points_to(dst, field_obj) {
-                changed = true;
+        for obj in dst_delta {
+            if !self.store_may_write_pointer_value_to_object(src, *obj) {
+                continue;
             }
-        }
 
-        if changed {
             debug!(
-                "[PAG Solver] solve_gep: create field objects: {:?}",
-                base_objects
+                "[PAG Solver] solve_store: create dynamic Copy edge n{} -[Copy]-> n{}    delta={:?}",
+                src, obj, dst_delta
             );
 
-            let edges = self.get_edges_with_lhs(dst);
-            for edge in edges {
-                self.add_to_worklist(edge);
+            if self.add_points_to_and_enqueue(*obj, &src_pts) {
+                changed = true;
             }
         }
 
         changed
     }
 
-    fn solve_indirect_call(&mut self, edge: PAEdge<'m>, callsite_id: usize) -> bool {
+    /// when pts(src) changes
+    /// src has new values, and dst already points to objects.
+    /// The already-created copy edges src -> obj will propagate src.diff.
+    fn solve_store_src(
+        &mut self,
+        _src: PANodeId,
+        dst: PANodeId,
+        src_delta: &BTreeSet<PANodeId>,
+    ) -> bool {
+        if src_delta.is_empty() {
+            return false;
+        }
+
+        let dst_pts = self.points_to_snapshot(dst);
+
+        let mut changed = false;
+
+        for obj in dst_pts {
+            if !self.object_may_hold_pointer_value(obj) {
+                continue;
+            }
+
+            debug!(
+                "[PAG Solver] solve_store: create dynamic Copy edge n{} -[Copy]-> n{}    delta={:?}",
+                obj, dst, src_delta
+            );
+
+            if self.add_points_to_and_enqueue(obj, src_delta) {
+                changed = true;
+            }
+        }
+
+        changed
+    }
+
+    fn solve_gep(
+        &mut self,
+        src: PANodeId,
+        dst: PANodeId,
+        indices: &[u64],
+        delta: &BTreeSet<PANodeId>,
+    ) -> bool {
+        let mut out = BTreeSet::new();
+
+        for base_obj in delta {
+            let field_obj = self.get_or_create_field_object(*base_obj, indices);
+            out.insert(field_obj);
+
+            debug!(
+                "[PAG Solver] solve_gep: create field objects: {:?}    delta={:?}",
+                field_obj, delta
+            );
+        }
+
+        self.add_points_to_and_enqueue(dst, &out)
+    }
+
+    fn solve_indirect_call(
+        &mut self,
+        edge: PAEdge<'m>,
+        callsite_id: usize,
+        delta: &BTreeSet<PANodeId>,
+    ) -> bool {
         let Some(callsite) = self.callsites.get(&callsite_id).cloned() else {
             return false;
         };
@@ -1720,16 +1740,14 @@ impl<'m> PointerAssignmentGraph<'m> {
             return false;
         }
 
-        let function_ptr_node: usize = edge.src;
-        let pts = self.diff_snapshot(function_ptr_node);
-        if pts.is_empty() {
+        if delta.is_empty() {
             return false;
         }
 
         let mut changed = false;
 
-        for obj_id in pts {
-            let Some(callee_name) = self.get_function_object_from_nodeid(obj_id) else {
+        for obj_id in delta {
+            let Some(callee_name) = self.get_function_object_from_nodeid(*obj_id) else {
                 continue;
             };
 
@@ -1761,7 +1779,12 @@ impl<'m> PointerAssignmentGraph<'m> {
         changed
     }
 
-    fn solve_receiver_call(&mut self, edge: PAEdge<'m>, callsite_id: usize) -> bool {
+    fn solve_receiver_call(
+        &mut self,
+        edge: PAEdge<'m>,
+        callsite_id: usize,
+        delta: &BTreeSet<PANodeId>,
+    ) -> bool {
         let Some(callsite) = self.callsites.get(&callsite_id).cloned() else {
             return false;
         };
@@ -1775,12 +1798,14 @@ impl<'m> PointerAssignmentGraph<'m> {
             return false;
         }
 
-        let receiver_node = edge.src;
-        let receiver_pts = self.diff_snapshot(receiver_node);
+        if delta.is_empty() {
+            return false;
+        }
+
         let mut changed = false;
 
-        for receiver_obj in receiver_pts {
-            let candidate_callees = self.candidate_callees_for_receiver(receiver_obj);
+        for receiver_obj in delta {
+            let candidate_callees = self.candidate_callees_for_receiver(*receiver_obj);
 
             for callee_func in candidate_callees {
                 let callee_name = callee_func.name.as_str();
@@ -1921,33 +1946,26 @@ impl<'m> PointerAssignmentGraph<'m> {
         id
     }
 
-    /// clear all diffs after each iteration
-    fn clear_all_diffs(&mut self) {
-        for node in self.nodes.values_mut() {
-            node.diff.clear();
-        }
-    }
+    // fn union_points_to_collect_delta(
+    //     &mut self,
+    //     node: PANodeId,
+    //     new_pts: &BTreeSet<PANodeId>,
+    // ) -> BTreeSet<PANodeId> {
+    //     let Some(n) = self.nodes.get_mut(&node) else {
+    //         return BTreeSet::new();
+    //     };
 
-    fn union_points_to_collect_delta(
-        &mut self,
-        node: PANodeId,
-        new_pts: &BTreeSet<PANodeId>,
-    ) -> BTreeSet<PANodeId> {
-        let Some(n) = self.nodes.get_mut(&node) else {
-            return BTreeSet::new();
-        };
+    //     let mut delta = BTreeSet::new();
 
-        let mut delta = BTreeSet::new();
+    //     for p in new_pts {
+    //         if n.points_to.insert(*p) {
+    //             n.diff.insert(*p);
+    //             delta.insert(*p);
+    //         }
+    //     }
 
-        for p in new_pts {
-            if n.points_to.insert(*p) {
-                n.diff.insert(*p);
-                delta.insert(*p);
-            }
-        }
-
-        delta
-    }
+    //     delta
+    // }
 
     fn points_to_snapshot(&self, node: PANodeId) -> BTreeSet<PANodeId> {
         self.nodes
@@ -1956,42 +1974,42 @@ impl<'m> PointerAssignmentGraph<'m> {
             .unwrap_or_default()
     }
 
-    fn diff_snapshot(&self, node: PANodeId) -> BTreeSet<PANodeId> {
-        self.nodes
-            .get(&node)
-            .map(|n| n.diff.clone())
-            .unwrap_or_default()
-    }
+    // fn diff_snapshot(&self, node: PANodeId) -> BTreeSet<PANodeId> {
+    //     self.nodes
+    //         .get(&node)
+    //         .map(|n| n.diff.clone())
+    //         .unwrap_or_default()
+    // }
 
-    fn insert_points_to(&mut self, node: PANodeId, pointee: PANodeId) -> bool {
-        let Some(n) = self.nodes.get_mut(&node) else {
-            return false;
-        };
+    // fn insert_points_to(&mut self, node: PANodeId, pointee: PANodeId) -> bool {
+    //     let Some(n) = self.nodes.get_mut(&node) else {
+    //         return false;
+    //     };
 
-        if n.points_to.insert(pointee) {
-            n.diff.insert(pointee);
-            true
-        } else {
-            false
-        }
-    }
+    //     if n.points_to.insert(pointee) {
+    //         n.diff.insert(pointee);
+    //         true
+    //     } else {
+    //         false
+    //     }
+    // }
 
-    fn union_points_to(&mut self, node: PANodeId, new_pts: &BTreeSet<PANodeId>) -> bool {
-        let Some(n) = self.nodes.get_mut(&node) else {
-            return false;
-        };
+    // fn union_points_to(&mut self, node: PANodeId, new_pts: &BTreeSet<PANodeId>) -> bool {
+    //     let Some(n) = self.nodes.get_mut(&node) else {
+    //         return false;
+    //     };
 
-        let mut changed = false;
+    //     let mut changed = false;
 
-        for p in new_pts {
-            if n.points_to.insert(*p) {
-                n.diff.insert(*p);
-                changed = true;
-            }
-        }
+    //     for p in new_pts {
+    //         if n.points_to.insert(*p) {
+    //             n.diff.insert(*p);
+    //             changed = true;
+    //         }
+    //     }
 
-        changed
-    }
+    //     changed
+    // }
 
     /// type filter
     fn store_may_write_pointer_value_to_object(
@@ -2130,8 +2148,6 @@ impl<'m> PointerAssignmentGraph<'m> {
 
         let total_points_to: usize = self.nodes.values().map(|node| node.points_to.len()).sum();
 
-        let total_diff: usize = self.nodes.values().map(|node| node.diff.len()).sum();
-
         println!("=== Pointer Analysis Statistics ===");
         println!("nodes: {}", num_nodes);
         println!("constraints/edges: {}", num_edges);
@@ -2140,7 +2156,6 @@ impl<'m> PointerAssignmentGraph<'m> {
         println!("discovered functions: {}", num_discovered_functions);
         println!("pending functions: {}", num_pending_functions);
         println!("total points-to facts: {}", total_points_to);
-        println!("total diff facts: {}", total_diff);
 
         self.print_node_kind_statistics();
         self.print_edge_kind_statistics();
@@ -2210,7 +2225,7 @@ impl<'m> PointerAssignmentGraph<'m> {
     }
 
     pub fn print_vtable_function_refs(&self) {
-        println!("=== Global Function Refs ===");
+        println!("\n=== Global Function Refs ===");
         println!("globals with function refs: {}", self.vtable2function.len());
 
         for (global, refs) in &self.vtable2function {
@@ -2904,4 +2919,86 @@ fn type_may_contain_pointer_depth(ty: &llvm_ir::TypeRef, depth: usize) -> bool {
 
         _ => false,
     }
+}
+
+fn work_item_lhs(item: &PAWorkItem) -> PANodeId {
+    match (&item.edge.kind, &item.delta) {
+        // Store: *dst = src
+        // If src changed, process as src-driven.
+        (PAEdgeKind::Store, PAWorkDelta::Src(_)) => item.edge.src,
+
+        // If dst changed, process as dst-driven.
+        (PAEdgeKind::Store, PAWorkDelta::Dst(_)) => item.edge.dst,
+
+        // Normal case.
+        _ => item.edge.src,
+    }
+}
+
+fn edge_kind_sort_key(kind: &PAEdgeKind) -> String {
+    match kind {
+        PAEdgeKind::AddressOf => "0_AddressOf".to_string(),
+        PAEdgeKind::Copy => "1_Copy".to_string(),
+        PAEdgeKind::Load => "2_Load".to_string(),
+        PAEdgeKind::Store => "3_Store".to_string(),
+        PAEdgeKind::GEP { indices } => format!("4_GEP_{:?}", indices),
+        PAEdgeKind::IndirectCall { callsite_id } => {
+            format!("5_IndirectCall_{}", callsite_id)
+        }
+        PAEdgeKind::ReceiverCall { callsite_id } => {
+            format!("6_ReceiverCall_{}", callsite_id)
+        }
+        _ => "1_Copy".to_string(),
+    }
+}
+
+fn delta_kind_rank(delta: &PAWorkDelta) -> u8 {
+    match delta {
+        PAWorkDelta::Src(_) => 0,
+        PAWorkDelta::Dst(_) => 1,
+        PAWorkDelta::Full => 2,
+    }
+}
+
+fn merge_sorted_work_items(items: Vec<PAWorkItem>) -> Vec<PAWorkItem> {
+    let mut out: Vec<PAWorkItem> = Vec::new();
+
+    for item in items {
+        if let Some(last) = out.last_mut() {
+            if same_work_item_group(last, &item) {
+                merge_work_delta(&mut last.delta, item.delta);
+                continue;
+            }
+        }
+
+        out.push(item);
+    }
+
+    out
+}
+
+fn same_work_item_group(a: &PAWorkItem, b: &PAWorkItem) -> bool {
+    same_edge(&a.edge, &b.edge) && delta_kind_rank(&a.delta) == delta_kind_rank(&b.delta)
+}
+
+fn merge_work_delta(dst: &mut PAWorkDelta, src: PAWorkDelta) {
+    match (dst, src) {
+        (PAWorkDelta::Src(dst_set), PAWorkDelta::Src(src_set)) => {
+            dst_set.extend(src_set);
+        }
+
+        (PAWorkDelta::Dst(dst_set), PAWorkDelta::Dst(src_set)) => {
+            dst_set.extend(src_set);
+        }
+
+        (PAWorkDelta::Full, PAWorkDelta::Full) => {}
+
+        _ => {}
+    }
+}
+
+fn same_edge(a: &PAEdge, b: &PAEdge) -> bool {
+    a.src == b.src && a.dst == b.dst && a.kind == b.kind
+    // && a.function == b.function
+    // && a.block == b.block
 }
