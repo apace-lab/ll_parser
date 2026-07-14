@@ -608,15 +608,22 @@ impl<'m> PointerAssignmentGraph<'m> {
                     }
 
                     Instruction::IntToPtr(inttoptr) => {
-                        let src = PANodeKind::Operand(&inttoptr.operand);
-                        let dst = PANodeKind::ValueName(&inttoptr.dest);
+                        // self.add_pag_edge(
+                        //     PANodeKind::UnknownObject {
+                        //         reason: format!(
+                        //             "inttoptr:{}:{}:{}",
+                        //             function_name, block_name, i.dest
+                        //         ),
+                        //     },
+                        //     PANodeKind::ValueName(&i.dest),
+                        //     PAEdgeKind::AddressOf,
+                        //     function_name,
+                        //     block_name.to_string(),
+                        // );
 
-                        self.add_pag_edge(
-                            src,
-                            dst,
-                            PAEdgeKind::IntToPtr,
-                            function_name,
-                            block_name.clone(),
+                        debug!(
+                            "[PAG] skip IntToPtr: operand={:?} dest={}",
+                            inttoptr.operand, inttoptr.dest
                         );
                     }
 
@@ -632,7 +639,7 @@ impl<'m> PointerAssignmentGraph<'m> {
                                 dst.clone(),
                                 PAEdgeKind::Phi,
                                 function_name,
-                                block_name.clone(),
+                                block_name.clone() + " (" + &kind + ")",
                             );
                         }
                     }
@@ -645,7 +652,7 @@ impl<'m> PointerAssignmentGraph<'m> {
                             dst.clone(),
                             PAEdgeKind::Select, // true branch
                             function_name,
-                            block_name.clone(),
+                            block_name.clone() + " (true branch)",
                         );
 
                         self.add_pag_edge(
@@ -653,7 +660,7 @@ impl<'m> PointerAssignmentGraph<'m> {
                             dst.clone(),
                             PAEdgeKind::Select, // false branch
                             function_name,
-                            block_name.clone(),
+                            block_name.clone() + " (false branch)",
                         );
                     }
 
@@ -727,6 +734,7 @@ impl<'m> PointerAssignmentGraph<'m> {
         };
 
         if self.functions_by_name.contains_key(clean_name.as_str()) {
+            // we did this in collect_vtable
             // // FunctionObject(@f) -[AddressOf]-> GlobalAddress(@f)
             // self.add_pag_edge(
             //     PANodeKind::FunctionObject {
@@ -972,7 +980,13 @@ impl<'m> PointerAssignmentGraph<'m> {
         let src = self.get_or_create_node(src_kind);
         let dst = self.get_or_create_node(dst_kind);
 
-        if kind == PAEdgeKind::Copy && !self.nodes_are_copy_compatible(src, dst) {
+        if (kind == PAEdgeKind::Copy
+            || kind == PAEdgeKind::BitCast
+            || kind == PAEdgeKind::AddrSpaceCast
+            || kind == PAEdgeKind::Phi
+            || kind == PAEdgeKind::Select)
+            && !self.nodes_are_copy_compatible(src, dst)
+        {
             debug!(
                 "[PAG] skip incompatible Copy edge: n{} ty={:?} -> n{} ty={:?}",
                 src,
@@ -1373,10 +1387,10 @@ impl<'m> PointerAssignmentGraph<'m> {
             for item in items {
                 let edge = item.edge;
 
-                debug!(
-                    "[PAG Solver] process item: n{} -[{:?}]-> n{} delta={:?}",
-                    edge.src, edge.kind, edge.dst, item.delta,
-                );
+                // debug!(
+                //     "[PAG Solver] process item: n{} -[{:?}]-> n{} delta={:?}",
+                //     edge.src, edge.kind, edge.dst, item.delta,
+                // );
 
                 match edge.kind {
                     PAEdgeKind::AddressOf => self.solve_address_of(edge.src, edge.dst),
@@ -1413,6 +1427,38 @@ impl<'m> PointerAssignmentGraph<'m> {
                         self.solve_gep(edge.src, edge.dst, indices, &delta)
                     }
 
+                    PAEdgeKind::BitCast => {
+                        let PAWorkDelta::Src(delta) = item.delta else {
+                            continue;
+                        };
+
+                        self.solve_bitcast(edge.src, edge.dst, &delta)
+                    }
+
+                    PAEdgeKind::AddrSpaceCast => {
+                        let PAWorkDelta::Src(delta) = item.delta else {
+                            continue;
+                        };
+
+                        self.solve_addr_space_cast(edge.src, edge.dst, &delta)
+                    }
+
+                    PAEdgeKind::IntToPtr => {
+                        let PAWorkDelta::Src(delta) = item.delta else {
+                            continue;
+                        };
+
+                        self.solve_int2pointer(edge.src, edge.dst, &delta)
+                    }
+
+                    PAEdgeKind::Phi | PAEdgeKind::Select => {
+                        let PAWorkDelta::Src(delta) = item.delta else {
+                            continue;
+                        };
+
+                        self.solve_merge(edge.src, edge.dst, &delta)
+                    }
+
                     PAEdgeKind::IndirectCall { callsite_id } => {
                         let PAWorkDelta::Src(delta) = item.delta else {
                             continue;
@@ -1427,16 +1473,6 @@ impl<'m> PointerAssignmentGraph<'m> {
                         };
 
                         self.solve_receiver_call(edge, callsite_id, &delta)
-                    }
-
-                    _ => {
-                        // For other edge kinds, we do conservative Copy for now.
-                        // We can extend this match statement to handle other edge kinds as needed.
-                        let PAWorkDelta::Src(delta) = item.delta else {
-                            continue;
-                        };
-
-                        self.solve_copy(edge.src, edge.dst, &delta)
                     }
                 };
             }
@@ -1498,7 +1534,7 @@ impl<'m> PointerAssignmentGraph<'m> {
             return false;
         }
 
-        debug!("    delta = {:?}", delta);
+        // debug!("    delta = {:?}", delta);
 
         // most edges where changed_node is src/lhs.
         if let Some(edges) = self.lhs2edges.get(&changed_node).cloned() {
@@ -1657,7 +1693,7 @@ impl<'m> PointerAssignmentGraph<'m> {
             }
 
             debug!(
-                "[PAG Solver] solve_store: create dynamic Copy edge n{} -[Copy]-> n{}    delta={:?}",
+                "[PAG Solver] solve_store (dst): create dynamic Copy edge n{} -[Copy]-> n{}    delta={:?}",
                 src, obj, dst_delta
             );
 
@@ -1692,7 +1728,7 @@ impl<'m> PointerAssignmentGraph<'m> {
             }
 
             debug!(
-                "[PAG Solver] solve_store: create dynamic Copy edge n{} -[Copy]-> n{}    delta={:?}",
+                "[PAG Solver] solve_store (src): create dynamic Copy edge n{} -[Copy]-> n{}    delta={:?}",
                 obj, dst, src_delta
             );
 
@@ -1724,6 +1760,79 @@ impl<'m> PointerAssignmentGraph<'m> {
         }
 
         self.add_points_to_and_enqueue(dst, &out)
+    }
+
+    /// BitCast constraint:
+    ///     dst = src
+    /// we create:
+    ///    src -[Copy]-> dst
+    /// So:
+    ///     pts(dst) += pts(src)
+    fn solve_bitcast(&mut self, src: PANodeId, dst: PANodeId, delta: &BTreeSet<PANodeId>) -> bool {
+        if delta.is_empty() {
+            return false;
+        }
+
+        debug!(
+            "[PAG Solver] solve_bitcast: pts(n{}) += pts(n{})    delta={:?}",
+            dst, src, delta
+        );
+
+        self.add_points_to_and_enqueue(dst, delta)
+    }
+
+    /// AddrSpaceCast constraint:
+    ///     dst = src
+    /// we create:
+    ///    src -[Copy]-> dst
+    /// So:
+    ///     pts(dst) += pts(src)
+    fn solve_addr_space_cast(
+        &mut self,
+        src: PANodeId,
+        dst: PANodeId,
+        delta: &BTreeSet<PANodeId>,
+    ) -> bool {
+        if delta.is_empty() {
+            return false;
+        }
+
+        debug!(
+            "[PAG Solver] solve_addr_space_cast: pts(n{}) += pts(n{})    delta={:?}",
+            dst, src, delta
+        );
+
+        self.add_points_to_and_enqueue(dst, delta)
+    }
+
+    /// IntToPtr constraint:
+    ///     skip for now
+    fn solve_int2pointer(
+        &mut self,
+        src: PANodeId,
+        dst: PANodeId,
+        delta: &BTreeSet<PANodeId>,
+    ) -> bool {
+        return false;
+    }
+
+    /// Phi and Select constraint:
+    ///     dst = src
+    /// we create:
+    ///    src -[Copy]-> dst
+    /// So:
+    ///     pts(dst) += pts(src)
+    fn solve_merge(&mut self, src: PANodeId, dst: PANodeId, delta: &BTreeSet<PANodeId>) -> bool {
+        if delta.is_empty() {
+            return false;
+        }
+
+        debug!(
+            "[PAG Solver] solve_bitcast: pts(n{}) += pts(n{})    delta={:?}",
+            dst, src, delta
+        );
+
+        self.add_points_to_and_enqueue(dst, delta)
     }
 
     fn solve_indirect_call(
@@ -2666,10 +2775,16 @@ fn should_skip_function_body(function_name: &str) -> bool {
     let name = normalize_function_name(function_name);
 
     if name.contains("hashbrown")
-        || name.contains("drop_in_place") 
+        || name.contains("alloc5alloc")
+        || name.contains("alloc7raw_vec")
+        || name.contains("alloc..raw_vec")
         || name.contains("core3fmt")
         || name.contains("core..fmt")
-        {
+        || name.contains("panic")
+        || name.contains("drop_in_place")
+        || name.contains("CString")
+        || name.contains("memchr")
+    {
         return true;
     }
 
