@@ -155,7 +155,7 @@ FunctionReturn(...) -> ValueName(dest) Copy
 
 
 
-### To model: 
+### To model: the goal (temp) is to make `_ZN4main16spawn_user_query28_$u7b$$u7b$closure$u7d$$u7d$17hb7b958eb69c4a9bcE` work
 
 "_ZN4core6result19Result$LT$T$C$E$GT$6unwrap17h7b56c101e767f365E.exit23": ; preds = %bb5
   %41 = getelementptr inbounds %"core::result::Result<std::sync::mutex::MutexGuard<'_, std::collections::hash::map::HashMap<alloc::string::String, alloc::string::String>>, std::sync::poison::PoisonError<std::sync::mutex::MutexGuard<'_, std::collections::hash::map::HashMap<alloc::string::String, alloc::string::String>>>>::Ok", ptr %_13, i32 0, i32 1
