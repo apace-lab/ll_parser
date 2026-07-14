@@ -2665,7 +2665,11 @@ fn call_return_type(function_ty: &llvm_ir::TypeRef) -> Option<llvm_ir::TypeRef> 
 fn should_skip_function_body(function_name: &str) -> bool {
     let name = normalize_function_name(function_name);
 
-    if name.contains("drop_in_place") {
+    if name.contains("hashbrown")
+        || name.contains("drop_in_place") 
+        || name.contains("core3fmt")
+        || name.contains("core..fmt")
+        {
         return true;
     }
 
