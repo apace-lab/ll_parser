@@ -245,7 +245,7 @@ pub enum PAEdgeKind {
     /// edge.dst = dst pointer
     MemCopy,
 
-    /// dst = src, but not type-filtered (for aggregate SSA values)
+    /// dst = src, for aggregate SSA values (filtered by nodes_may_carry_pointer)
     AggregateCopy,
 
     /// dst = extractvalue src, field
@@ -1258,6 +1258,18 @@ impl<'m> PointerAssignmentGraph<'m> {
             return;
         }
 
+        // aggregate copies keep struct/array values whose fields hold pointers
+        if kind == PAEdgeKind::AggregateCopy && !self.nodes_may_carry_pointer(src, dst) {
+            debug!(
+                "[PAG] skip pointer-free AggregateCopy edge: n{} ty={:?} -> n{} ty={:?}",
+                src,
+                self.nodes.get(&src).and_then(|n| n.ty.as_ref()),
+                dst,
+                self.nodes.get(&dst).and_then(|n| n.ty.as_ref()),
+            );
+            return;
+        }
+
         debug!(
             "add_edge: adding edge from n{} -[{:?}]-> n{} in function={} block={}",
             src, kind, dst, function, block
@@ -1281,6 +1293,21 @@ impl<'m> PointerAssignmentGraph<'m> {
         match (src_ty, dst_ty) {
             (Some(src_ty), Some(dst_ty)) => {
                 type_is_pointer_like(src_ty) && type_is_pointer_like(dst_ty)
+            }
+
+            // Unknown type: do not reject.
+            (None, _) | (_, None) => true,
+        }
+    }
+
+    /// like nodes_are_copy_compatible, but keeps aggregates whose fields hold pointers
+    fn nodes_may_carry_pointer(&self, src: PANodeId, dst: PANodeId) -> bool {
+        let src_ty = self.nodes.get(&src).and_then(|n| n.ty.as_ref());
+        let dst_ty = self.nodes.get(&dst).and_then(|n| n.ty.as_ref());
+
+        match (src_ty, dst_ty) {
+            (Some(src_ty), Some(dst_ty)) => {
+                type_may_contain_pointer(src_ty) && type_may_contain_pointer(dst_ty)
             }
 
             // Unknown type: do not reject.
