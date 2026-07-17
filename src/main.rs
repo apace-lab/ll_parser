@@ -128,10 +128,13 @@ fn main() -> Result<(), Box<dyn Error>> {
     // println!("Wrote pointer assignment graph to cg.txt");
 
     // generate pag
-    analysis
-        .pointer_assignment_graph()
-        .print_pointer_assignment_graph()?;
+    let pag = analysis.pointer_assignment_graph();
+
+    pag.print_pointer_assignment_graph()?;
     println!("Wrote pointer assignment graph to pag.txt");
+
+    pag.print_points_to_sets()?;
+    println!("Wrote points-to sets to points_to.txt");
 
     Ok(())
 }

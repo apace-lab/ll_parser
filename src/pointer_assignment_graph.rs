@@ -2678,8 +2678,12 @@ impl<'m> PointerAssignmentGraph<'m> {
         let mut nodes: Vec<_> = self.nodes.iter().collect();
         nodes.sort_by_key(|(id, _node)| **id);
 
-        for (id, node) in nodes {
-            write!(file, "  {} \n    -> {{", node)?;
+        for (_id, node) in nodes {
+            if node.points_to.is_empty() {
+                continue;
+            }
+
+            write!(file, "  {}\n    -> {{", node)?;
 
             let mut first = true;
 
@@ -2688,13 +2692,6 @@ impl<'m> PointerAssignmentGraph<'m> {
                     write!(file, ", ")?;
                 }
 
-                /// print the pointee node in a more readable format
-                // let pointee = self
-                //     .nodes
-                //     .get(pointee_id)
-                //     .map(|n| format!("n{}:{}", pointee_id, n))
-                //     .unwrap_or_else(|| format!("n{}:<missing>", pointee_id));
-                // write!(file, "{}", pointee)?;
                 write!(file, "n{}", pointee_id)?;
                 first = false;
             }
