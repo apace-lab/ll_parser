@@ -86,6 +86,13 @@ pub enum PANodeKind<'m> {
         origin: PANodeId,
         field: Vec<u64>,
     },
+
+    /// a heap allocation site (modeled heuristically at the allocator callsite)
+    HeapObject {
+        function: String,
+        block: String,
+        name: String,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -185,6 +192,14 @@ impl<'m> PANodeKind<'m> {
 
             Self::AggregateField { origin, field } => {
                 format!("aggregate_field::n{}::{:?}", origin, field)
+            }
+
+            Self::HeapObject {
+                function,
+                block,
+                name,
+            } => {
+                format!("heap_object::{}::{}::{}", function, block, name)
             }
         }
     }
@@ -563,6 +578,7 @@ impl<'m> PointerAssignmentGraph<'m> {
     pub fn handle_special_rust_functions(
         &mut self,
         function_name: &str,
+        caller_name: &str,
         block_name: &str,
         callsite_kind: &PACallSiteKind<'m>,
     ) -> bool {
@@ -608,6 +624,33 @@ impl<'m> PointerAssignmentGraph<'m> {
 
                 return true;
             }
+        }
+
+        // heap allocation: model the raw allocator as a fresh heap object at the
+        // callsite and bind it to the result, without analyzing the allocator body
+        if is_heap_allocator(function_name) {
+            if let Some(result) = self.get_callsite_result(&callsite_kind) {
+                let heap = PANodeKind::HeapObject {
+                    function: caller_name.to_string(),
+                    block: block_name.to_string(),
+                    name: format!("{}", result),
+                };
+
+                self.add_pag_edge(
+                    heap,
+                    PANodeKind::ValueName(result),
+                    PAEdgeKind::AddressOf,
+                    function_name.to_string(),
+                    block_name.to_string(),
+                );
+
+                debug!(
+                    "[PAG] model heap alloc: {}::{}::{} for {}",
+                    caller_name, block_name, result, function_name
+                );
+            }
+
+            return true;
         }
 
         // smart-pointer deref: the result aliases the self argument
@@ -1054,6 +1097,7 @@ impl<'m> PointerAssignmentGraph<'m> {
             | PANodeKind::TableSlot { .. }
             | PANodeKind::GlobalAddress { .. }
             | PANodeKind::AggregateField { .. }
+            | PANodeKind::HeapObject { .. }
             | PANodeKind::FunctionObject { .. } => None,
         }
     }
@@ -1433,7 +1477,12 @@ impl<'m> PointerAssignmentGraph<'m> {
         // ------------------------------------------------------------
         if let Some(direct_callee_name) = direct_callee_name {
             // handle special functions if exists
-            if self.handle_special_rust_functions(&direct_callee_name, block_name, &callsite_kind) {
+            if self.handle_special_rust_functions(
+                &direct_callee_name,
+                caller_name,
+                block_name,
+                &callsite_kind,
+            ) {
                 return;
             }
 
@@ -2838,6 +2887,7 @@ impl<'m> PointerAssignmentGraph<'m> {
                 PANodeKind::GlobalAddress { .. } => "GlobalAddress",
                 PANodeKind::TableSlot { .. } => "TableSlot",
                 PANodeKind::AggregateField { .. } => "AggregateField",
+                PANodeKind::HeapObject { .. } => "HeapObject",
             };
 
             *counts.entry(kind).or_insert(0) += 1;
@@ -3116,6 +3166,20 @@ fn is_option_cloned(function_name: &str) -> bool {
     let name = demangle(function_name).to_string();
 
     name.starts_with("core::option::Option") && name.contains(">::cloned")
+}
+
+/// raw allocators we model as heap-object factories (their bodies are skipped)
+fn is_heap_allocator(function_name: &str) -> bool {
+    if function_name.contains("__rust_alloc") {
+        return true;
+    }
+
+    let name = demangle(function_name).to_string();
+
+    name.contains("alloc::alloc::exchange_malloc")
+        || name.contains("alloc::alloc::alloc")
+        || name.contains("::alloc_impl")
+        || (name.contains("raw_vec::RawVec") && name.contains("allocate_in"))
 }
 
 fn named_struct_name(receiver_ty: &TypeRef) -> Option<String> {
