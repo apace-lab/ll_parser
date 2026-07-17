@@ -5,6 +5,7 @@
 //! see the [crate's README](https://github.com/cdisselkoen/llvm-ir-analysis/blob/main/README.md).
 
 mod call_graph;
+pub mod context_finder;
 mod control_dep_graph;
 mod control_flow_graph;
 mod dominator_tree;
