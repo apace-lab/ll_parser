@@ -1,7 +1,7 @@
 *.log
 *.txt
 target
-examples
+taint_config.json
 
 
 
