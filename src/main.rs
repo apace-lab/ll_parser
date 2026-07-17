@@ -92,9 +92,12 @@ fn write_module_to_file(module: &Module, output_txt: &str) -> Result<(), Box<dyn
 fn main() -> Result<(), Box<dyn Error>> {
     let args: Vec<String> = env::args().collect();
 
-    if args.len() != 3 {
+    if args.len() < 3 {
         eprintln!("Usage:");
-        eprintln!("  {} <input.ll> <output.txt>", args[0]);
+        eprintln!(
+            "  {} <input.ll> <output.txt> [llm_catalog.json] [ac_catalog.json]",
+            args[0]
+        );
         std::process::exit(1);
     }
 
@@ -132,6 +135,22 @@ fn main() -> Result<(), Box<dyn Error>> {
         .pointer_assignment_graph()
         .print_pointer_assignment_graph()?;
     println!("Wrote pointer assignment graph to pag.txt");
+
+    // find context points (LLM API / access-control call sites) if catalogs given
+    if args.len() >= 5 {
+        let llm = ll_parser::context_finder::load_signatures(std::path::Path::new(&args[3]))?;
+        let ac = ll_parser::context_finder::load_signatures(std::path::Path::new(&args[4]))?;
+
+        let points = ll_parser::context_finder::find_context_points(&module, &llm, &ac);
+        ll_parser::context_finder::print_context_points(&points)?;
+
+        println!(
+            "Found {} context points ({} LLM signatures, {} AC signatures) -> context_points.txt",
+            points.len(),
+            llm.len(),
+            ac.len()
+        );
+    }
 
     Ok(())
 }
