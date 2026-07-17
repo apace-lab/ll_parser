@@ -80,6 +80,12 @@ pub enum PANodeKind<'m> {
         global: String,
         index: usize,
     },
+
+    /// the value packed into a field of an aggregate SSA value (insertvalue)
+    AggregateField {
+        origin: PANodeId,
+        field: Vec<u64>,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -176,6 +182,10 @@ impl<'m> PANodeKind<'m> {
             Self::TableSlot { global, index } => {
                 format!("table_slot::{}::{}", global, index)
             }
+
+            Self::AggregateField { origin, field } => {
+                format!("aggregate_field::n{}::{:?}", origin, field)
+            }
         }
     }
 }
@@ -234,6 +244,12 @@ pub enum PAEdgeKind {
     /// edge.src = src pointer
     /// edge.dst = dst pointer
     MemCopy,
+
+    /// dst = src, but not type-filtered (for aggregate SSA values)
+    AggregateCopy,
+
+    /// dst = extractvalue src, field
+    ExtractValue { field: Vec<u64> },
 }
 
 #[derive(Debug, Clone)]
@@ -594,6 +610,73 @@ impl<'m> PointerAssignmentGraph<'m> {
             }
         }
 
+        // smart-pointer deref: the result aliases the self argument
+        // <T as core::ops::deref::Deref>::deref(self) -> &T
+        if is_smart_pointer_deref(function_name) {
+            let self_arg = self
+                .get_callsite_arguments(&callsite_kind)
+                .first()
+                .map(|(op, _)| op);
+            let result = self.get_callsite_result(&callsite_kind);
+
+            if let (Some(self_arg), Some(result)) = (self_arg, result) {
+                self.add_pag_edge(
+                    PANodeKind::Operand(self_arg),
+                    PANodeKind::ValueName(result),
+                    PAEdgeKind::AggregateCopy,
+                    function_name.to_string(),
+                    block_name.to_string(),
+                );
+
+                // String::deref returns { ptr, i64 }; expose the data pointer as field 0
+                if is_string_deref(function_name) {
+                    let dst = self.get_or_create_node(PANodeKind::ValueName(result));
+                    let slot = PANodeKind::AggregateField {
+                        origin: dst,
+                        field: vec![0],
+                    };
+
+                    self.add_pag_edge(
+                        PANodeKind::Operand(self_arg),
+                        slot.clone(),
+                        PAEdgeKind::AggregateCopy,
+                        function_name.to_string(),
+                        block_name.to_string(),
+                    );
+
+                    self.add_pag_edge(
+                        slot,
+                        PANodeKind::ValueName(result),
+                        PAEdgeKind::AddressOf,
+                        function_name.to_string(),
+                        block_name.to_string(),
+                    );
+                }
+            }
+
+            return true;
+        }
+
+        // core::option::Option<&T>::cloned(sret out, opt): copy contents opt -> out
+        if is_option_cloned(function_name) {
+            let args = self.get_callsite_arguments(&callsite_kind);
+
+            if args.len() >= 2 {
+                let out_ptr = &args[0].0;
+                let src_ptr = &args[1].0;
+
+                self.add_pag_edge(
+                    PANodeKind::Operand(src_ptr),
+                    PANodeKind::Operand(out_ptr),
+                    PAEdgeKind::MemCopy,
+                    function_name.to_string(),
+                    block_name.to_string(),
+                );
+
+                return true;
+            }
+        }
+
         false
     }
 
@@ -765,6 +848,65 @@ impl<'m> PointerAssignmentGraph<'m> {
                         );
                     }
 
+                    Instruction::InsertValue(insertvalue) => {
+                        // %new = insertvalue %old, %val, field
+                        let field = indices_as_u64(&insertvalue.indices);
+                        let dst = self.get_or_create_node(PANodeKind::ValueName(&insertvalue.dest));
+                        let slot = PANodeKind::AggregateField {
+                            origin: dst,
+                            field,
+                        };
+
+                        // inherit the other fields from the base aggregate
+                        self.add_pag_edge(
+                            PANodeKind::Operand(&insertvalue.aggregate),
+                            PANodeKind::ValueName(&insertvalue.dest),
+                            PAEdgeKind::AggregateCopy,
+                            function_name.clone(),
+                            block_name.clone(),
+                        );
+
+                        // pts(slot) = pts(%val)
+                        self.add_pag_edge(
+                            PANodeKind::Operand(&insertvalue.element),
+                            slot.clone(),
+                            PAEdgeKind::AggregateCopy,
+                            function_name.clone(),
+                            block_name.clone(),
+                        );
+
+                        // %new points to the slot
+                        self.add_pag_edge(
+                            slot,
+                            PANodeKind::ValueName(&insertvalue.dest),
+                            PAEdgeKind::AddressOf,
+                            function_name.clone(),
+                            block_name.clone(),
+                        );
+                    }
+
+                    Instruction::ExtractValue(extractvalue) => {
+                        // %dst = extractvalue %agg, field
+                        let field = indices_as_u64(&extractvalue.indices);
+                        self.add_pag_edge(
+                            PANodeKind::Operand(&extractvalue.aggregate),
+                            PANodeKind::ValueName(&extractvalue.dest),
+                            PAEdgeKind::ExtractValue { field },
+                            function_name.clone(),
+                            block_name.clone(),
+                        );
+                    }
+
+                    Instruction::Trunc(trunc) => {
+                        self.add_pag_edge(
+                            PANodeKind::Operand(&trunc.operand),
+                            PANodeKind::ValueName(&trunc.dest),
+                            PAEdgeKind::Copy,
+                            function_name.clone(),
+                            block_name.clone(),
+                        );
+                    }
+
                     Instruction::Call(call) => {
                         self.add_call_edges(
                             &function_name,
@@ -911,6 +1053,7 @@ impl<'m> PointerAssignmentGraph<'m> {
             | PANodeKind::IndirectCallTarget { .. }
             | PANodeKind::TableSlot { .. }
             | PANodeKind::GlobalAddress { .. }
+            | PANodeKind::AggregateField { .. }
             | PANodeKind::FunctionObject { .. } => None,
         }
     }
@@ -1612,6 +1755,22 @@ impl<'m> PointerAssignmentGraph<'m> {
 
                         PAWorkDelta::Full => false,
                     },
+
+                    PAEdgeKind::AggregateCopy => {
+                        let PAWorkDelta::Src(delta) = item.delta else {
+                            continue;
+                        };
+
+                        self.solve_copy(edge.src, edge.dst, &delta)
+                    }
+
+                    PAEdgeKind::ExtractValue { ref field } => {
+                        let PAWorkDelta::Src(delta) = item.delta else {
+                            continue;
+                        };
+
+                        self.solve_extractvalue(&edge, field, &delta)
+                    }
                 };
             }
         }
@@ -1799,6 +1958,60 @@ impl<'m> PointerAssignmentGraph<'m> {
         }
 
         changed
+    }
+
+    /// ExtractValue constraint:
+    ///     dst = extractvalue src, field
+    /// for each aggregate field slot obj in pts(src) matching field:
+    ///     obj -[Copy]-> dst
+    fn solve_extractvalue(
+        &mut self,
+        edge: &PAEdge,
+        field: &[u64],
+        delta: &BTreeSet<PANodeId>,
+    ) -> bool {
+        let dst = edge.dst;
+        let mut changed = false;
+
+        for obj in delta {
+            if !self.aggregate_field_matches(*obj, field) {
+                continue;
+            }
+
+            let edge = PAEdge {
+                src: *obj,
+                dst,
+                kind: PAEdgeKind::Copy,
+                function: edge.function.clone(),
+                block: edge.block.clone(),
+            };
+
+            if self.edges.iter().any(|e| same_edge(e, &edge)) {
+                continue;
+            }
+
+            self.lhs2edges.entry(*obj).or_default().push(edge.clone());
+            self.edges.push(edge.clone());
+
+            let seed_delta = self.points_to_snapshot(*obj);
+            if !seed_delta.is_empty() {
+                self.worklist.push(PAWorkItem {
+                    edge,
+                    delta: PAWorkDelta::Src(seed_delta),
+                });
+            }
+
+            changed = true;
+        }
+
+        changed
+    }
+
+    fn aggregate_field_matches(&self, obj: PANodeId, field: &[u64]) -> bool {
+        matches!(
+            self.nodes.get(&obj).map(|n| &n.kind),
+            Some(PANodeKind::AggregateField { field: f, .. }) if f.as_slice() == field
+        )
     }
 
     /// Store constraint:
@@ -2589,6 +2802,8 @@ impl<'m> PointerAssignmentGraph<'m> {
                 PAEdgeKind::IndirectCall { .. } => "IndirectCall",
                 PAEdgeKind::ReceiverCall { .. } => "ReceiverCall",
                 PAEdgeKind::MemCopy => "MemCopy",
+                PAEdgeKind::AggregateCopy => "AggregateCopy",
+                PAEdgeKind::ExtractValue { .. } => "ExtractValue",
             };
 
             *counts.entry(kind).or_insert(0) += 1;
@@ -2622,6 +2837,7 @@ impl<'m> PointerAssignmentGraph<'m> {
                 PANodeKind::GlobalObject { .. } => "GlobalObject",
                 PANodeKind::GlobalAddress { .. } => "GlobalAddress",
                 PANodeKind::TableSlot { .. } => "TableSlot",
+                PANodeKind::AggregateField { .. } => "AggregateField",
             };
 
             *counts.entry(kind).or_insert(0) += 1;
@@ -2877,6 +3093,31 @@ fn is_arc_clone(function_name: &str) -> bool {
     name.starts_with("<alloc::sync::Arc<") && name.contains("> as core::clone::Clone>::clone")
 }
 
+/// <T as core::ops::deref::Deref>::deref for the smart pointers we alias through
+fn is_smart_pointer_deref(function_name: &str) -> bool {
+    let name = demangle(function_name).to_string();
+
+    name.contains("as core::ops::deref::Deref>::deref")
+        && (name.starts_with("<alloc::string::String")
+            || name.starts_with("<alloc::sync::Arc<")
+            || name.starts_with("<std::sync::mutex::MutexGuard<"))
+}
+
+/// <alloc::string::String as ...Deref>::deref returns { ptr, i64 }
+fn is_string_deref(function_name: &str) -> bool {
+    let name = demangle(function_name).to_string();
+
+    name.starts_with("<alloc::string::String")
+        && name.contains("as core::ops::deref::Deref>::deref")
+}
+
+/// core::option::Option<&T>::cloned
+fn is_option_cloned(function_name: &str) -> bool {
+    let name = demangle(function_name).to_string();
+
+    name.starts_with("core::option::Option") && name.contains(">::cloned")
+}
+
 fn named_struct_name(receiver_ty: &TypeRef) -> Option<String> {
     match receiver_ty.as_ref() {
         Type::NamedStructType { name } => Some(format!("{}", name)),
@@ -2894,6 +3135,11 @@ fn normalize_function_name(name: &str) -> &str {
     name.trim_start_matches('%')
         .trim_start_matches('@')
         .trim_matches('"')
+}
+
+/// compute indices for insertvalue/extractvalue (constant struct indices)
+fn indices_as_u64(indices: &[u32]) -> Vec<u64> {
+    indices.iter().map(|i| *i as u64).collect()
 }
 
 /// compute indices for GEP, can be unknown (empty)
@@ -3236,6 +3482,7 @@ fn edge_kind_sort_key(kind: &PAEdgeKind) -> String {
         PAEdgeKind::ReceiverCall { callsite_id } => {
             format!("6_ReceiverCall_{}", callsite_id)
         }
+        PAEdgeKind::ExtractValue { field } => format!("2_ExtractValue_{:?}", field),
         _ => "1_Copy".to_string(),
     }
 }
