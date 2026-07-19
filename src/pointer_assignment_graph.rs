@@ -17,6 +17,9 @@ use std::time::Instant;
 const MAX_FIELD_DEPTH: usize = 2;
 const SUMMARY_FIELD: u64 = u64::MAX; // collapse
 
+const BYTE_OFFSET_MARKER: u64 = u64::MAX - 1;
+const BYTE_OFFSET_SUMMARY: u64 = u64::MAX - 2;
+
 pub type PANodeId = usize;
 
 #[derive(Debug, Clone)]
@@ -232,8 +235,11 @@ pub enum PAEdgeKind {
     /// *dst = src
     Store,
 
-    /// dst = src[offset]: getelementptr
+    /// dst = src[offset]: getelementptr when src has type
     GEP { indices: Vec<u64> },
+
+    /// GEP when source have no type
+    ByteOffsetGEP { offset: i64 },
 
     /// dst = bitcast src
     BitCast,
@@ -265,7 +271,7 @@ pub enum PAEdgeKind {
     AggregateCopy,
 
     /// dst = extractvalue src, field
-    ExtractValue { field: Vec<u64> },
+    ExtractCopy { field: Vec<u64> },
 }
 
 #[derive(Debug, Clone)]
@@ -806,14 +812,46 @@ impl<'m> PointerAssignmentGraph<'m> {
                             &block_name,
                         );
 
-                        let indices = gep_indices_as_u64(&gep.indices);
-                        self.add_pag_edge(
-                            PANodeKind::Operand(&gep.address),
-                            PANodeKind::ValueName(&gep.dest),
-                            PAEdgeKind::GEP { indices },
-                            function_name.clone(),
-                            block_name.clone(),
-                        );
+                        match gep.source_element_type.as_ref() {
+                            llvm_ir::Type::IntegerType { bits: 8 } => {
+                                // byte-offset GEP
+                                // e.g.,  %42 = getelementptr inbounds i8, ptr %41, i64 8
+                                if let Some(offset) = gep_single_constant_offset(&gep.indices) {
+                                    self.add_pag_edge(
+                                        PANodeKind::Operand(&gep.address),
+                                        PANodeKind::ValueName(&gep.dest),
+                                        PAEdgeKind::ByteOffsetGEP { offset },
+                                        function_name.to_string(),
+                                        block_name.to_string(),
+                                    );
+                                } else {
+                                    println!("[PAG] no offset in GEP: {}", gep);
+                                }
+                            }
+
+                            llvm_ir::Type::StructType { .. }
+                            | llvm_ir::Type::NamedStructType { .. }
+                            | llvm_ir::Type::ArrayType { .. } => {
+                                // typed aggregate GEP
+                                // %133 = getelementptr inbounds %"core::result::Result<...>::Ok", ptr %_46, i32 0, i32 1
+                                let indices = gep_indices_as_u64(&gep.indices);
+                                self.add_pag_edge(
+                                    PANodeKind::Operand(&gep.address),
+                                    PANodeKind::ValueName(&gep.dest),
+                                    PAEdgeKind::GEP { indices },
+                                    function_name.clone(),
+                                    block_name.clone(),
+                                );
+                            }
+
+                            _ => {
+                                // unknown/general GEP
+                                println!(
+                                    "[PAG] unknow GEP source type = {:?}",
+                                    gep.source_element_type
+                                );
+                            }
+                        }
                     }
 
                     Instruction::BitCast(bitcast) => {
@@ -906,10 +944,7 @@ impl<'m> PointerAssignmentGraph<'m> {
                         // %new = insertvalue %old, %val, field
                         let field = indices_as_u64(&insertvalue.indices);
                         let dst = self.get_or_create_node(PANodeKind::ValueName(&insertvalue.dest));
-                        let slot = PANodeKind::AggregateField {
-                            origin: dst,
-                            field,
-                        };
+                        let slot = PANodeKind::AggregateField { origin: dst, field };
 
                         // inherit the other fields from the base aggregate
                         self.add_pag_edge(
@@ -945,7 +980,7 @@ impl<'m> PointerAssignmentGraph<'m> {
                         self.add_pag_edge(
                             PANodeKind::Operand(&extractvalue.aggregate),
                             PANodeKind::ValueName(&extractvalue.dest),
-                            PAEdgeKind::ExtractValue { field },
+                            PAEdgeKind::ExtractCopy { field },
                             function_name.clone(),
                             block_name.clone(),
                         );
@@ -1189,6 +1224,34 @@ impl<'m> PointerAssignmentGraph<'m> {
             base: root_base,
             field,
             field_type,
+        })
+    }
+
+    fn get_or_create_byte_offset_field_object(
+        &mut self,
+        base_obj: PANodeId,
+        offset: i64,
+    ) -> PANodeId {
+        let Some(base_node) = self.nodes.get(&base_obj) else {
+            return base_obj;
+        };
+
+        let root_base = match &base_node.kind {
+            PANodeKind::FieldObject { base, .. } => base,
+
+            _ => &base_obj,
+        };
+
+        let offset_key = if offset >= 0 && offset <= 4096 {
+            offset as u64
+        } else {
+            BYTE_OFFSET_SUMMARY
+        };
+
+        self.get_or_create_node(PANodeKind::FieldObject {
+            base: *root_base,
+            field: vec![BYTE_OFFSET_MARKER, offset_key],
+            field_type: None,
         })
     }
 
@@ -1799,6 +1862,14 @@ impl<'m> PointerAssignmentGraph<'m> {
                         self.solve_gep(edge.src, edge.dst, indices, &delta)
                     }
 
+                    PAEdgeKind::ByteOffsetGEP { offset } => {
+                        let PAWorkDelta::Src(delta) = item.delta else {
+                            continue;
+                        };
+
+                        self.solve_byte_offset_gep(edge.src, edge.dst, offset, &delta)
+                    }
+
                     PAEdgeKind::BitCast => {
                         let PAWorkDelta::Src(delta) = item.delta else {
                             continue;
@@ -1867,12 +1938,12 @@ impl<'m> PointerAssignmentGraph<'m> {
                         self.solve_copy(edge.src, edge.dst, &delta)
                     }
 
-                    PAEdgeKind::ExtractValue { ref field } => {
+                    PAEdgeKind::ExtractCopy { ref field } => {
                         let PAWorkDelta::Src(delta) = item.delta else {
                             continue;
                         };
 
-                        self.solve_extractvalue(&edge, field, &delta)
+                        self.solve_extract_copy(&edge, field, &delta)
                     }
                 };
             }
@@ -2067,7 +2138,7 @@ impl<'m> PointerAssignmentGraph<'m> {
     ///     dst = extractvalue src, field
     /// for each aggregate field slot obj in pts(src) matching field:
     ///     obj -[Copy]-> dst
-    fn solve_extractvalue(
+    fn solve_extract_copy(
         &mut self,
         edge: &PAEdge,
         field: &[u64],
@@ -2321,6 +2392,27 @@ impl<'m> PointerAssignmentGraph<'m> {
                 field_obj, delta
             );
 
+            out.insert(field_obj);
+        }
+
+        self.add_points_to_and_enqueue(dst, &out)
+    }
+
+    fn solve_byte_offset_gep(
+        &mut self,
+        src: PANodeId,
+        dst: PANodeId,
+        offset: i64,
+        delta: &BTreeSet<PANodeId>,
+    ) -> bool {
+        if delta.is_empty() {
+            return false;
+        }
+
+        let mut out = BTreeSet::new();
+
+        for base_obj in delta {
+            let field_obj = self.get_or_create_byte_offset_field_object(*base_obj, offset);
             out.insert(field_obj);
         }
 
@@ -2901,6 +2993,7 @@ impl<'m> PointerAssignmentGraph<'m> {
                 PAEdgeKind::Load => "Load",
                 PAEdgeKind::Store => "Store",
                 PAEdgeKind::GEP { .. } => "GEP",
+                PAEdgeKind::ByteOffsetGEP { .. } => "ByteOffsetGEP",
                 PAEdgeKind::AddrSpaceCast { .. } => "AddrSpaceCast",
                 PAEdgeKind::BitCast { .. } => "BitCast",
                 PAEdgeKind::IntToPtr { .. } => "IntToPtr",
@@ -2910,16 +3003,24 @@ impl<'m> PointerAssignmentGraph<'m> {
                 PAEdgeKind::ReceiverCall { .. } => "ReceiverCall",
                 PAEdgeKind::MemCopy => "MemCopy",
                 PAEdgeKind::AggregateCopy => "AggregateCopy",
-                PAEdgeKind::ExtractValue { .. } => "ExtractValue",
+                PAEdgeKind::ExtractCopy { .. } => "ExtractCopy",
             };
 
             *counts.entry(kind).or_insert(0) += 1;
         }
 
+        let mut entries: Vec<(&'static str, usize)> =
+            counts.iter().map(|(kind, count)| (*kind, *count)).collect();
+
+        entries.sort_by(|a, b| {
+            b.1.cmp(&a.1) // count descending
+                .then_with(|| a.0.cmp(b.0)) // tie-break by name ascending
+        });
+
         println!();
         println!("=== Constraint Kind Statistics ===");
 
-        for (kind, count) in counts {
+        for (kind, count) in entries {
             println!("{}: {}", kind, count);
         }
         println!()
@@ -2951,10 +3052,18 @@ impl<'m> PointerAssignmentGraph<'m> {
             *counts.entry(kind).or_insert(0) += 1;
         }
 
+        let mut entries: Vec<(&'static str, usize)> =
+            counts.iter().map(|(kind, count)| (*kind, *count)).collect();
+
+        entries.sort_by(|a, b| {
+            b.1.cmp(&a.1) // count descending
+                .then_with(|| a.0.cmp(b.0)) // tie-break by name ascending
+        });
+
         println!();
         println!("=== Node Kind Statistics ===");
 
-        for (kind, count) in counts {
+        for (kind, count) in entries {
             println!("{}: {}", kind, count);
         }
     }
@@ -3262,6 +3371,18 @@ fn normalize_function_name(name: &str) -> &str {
 /// compute indices for insertvalue/extractvalue (constant struct indices)
 fn indices_as_u64(indices: &[u32]) -> Vec<u64> {
     indices.iter().map(|i| *i as u64).collect()
+}
+
+fn gep_single_constant_offset(indices: &[llvm_ir::Operand]) -> Option<i64> {
+    if indices.len() == 1 {
+        if let Some(idx) = indices.get(0) {
+            if let Some(offset) = const_int_operand_as_u64(idx) {
+                return Some(offset.try_into().unwrap());
+            }
+        }
+    }
+
+    return None;
 }
 
 /// compute indices for GEP, can be unknown (empty)
@@ -3598,13 +3719,14 @@ fn edge_kind_sort_key(kind: &PAEdgeKind) -> String {
         PAEdgeKind::Load => "2_Load".to_string(),
         PAEdgeKind::Store => "3_Store".to_string(),
         PAEdgeKind::GEP { indices } => format!("4_GEP_{:?}", indices),
+        PAEdgeKind::ByteOffsetGEP { offset } => format!("4_ByteOffsetGEP_{:?}", offset),
         PAEdgeKind::IndirectCall { callsite_id } => {
             format!("5_IndirectCall_{}", callsite_id)
         }
         PAEdgeKind::ReceiverCall { callsite_id } => {
             format!("6_ReceiverCall_{}", callsite_id)
         }
-        PAEdgeKind::ExtractValue { field } => format!("2_ExtractValue_{:?}", field),
+        PAEdgeKind::ExtractCopy { field } => format!("2_ExtractCopy_{:?}", field),
         _ => "1_Copy".to_string(),
     }
 }
