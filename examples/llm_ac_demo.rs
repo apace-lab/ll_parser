@@ -3,7 +3,7 @@
 // the AFG catalogs (async_openai::chat::Chat::create, actix_identity::Identity::id)
 // by the last-two-segment short-name rule. Stubbed so it compiles with no
 // external crates. Compile with an LLVM-19 rustc:
-//   rustup run nightly-2025-02-01 rustc tests/llm_ac_demo.rs --emit=llvm-ir -o tests/llm_ac_demo.ll
+//   rustup run nightly-2025-02-01 rustc examples/llm_ac_demo.rs --emit=llvm-ir -o examples/llm_ac_demo.ll
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};

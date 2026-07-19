@@ -92,10 +92,10 @@ fn write_module_to_file(module: &Module, output_txt: &str) -> Result<(), Box<dyn
 fn main() -> Result<(), Box<dyn Error>> {
     let args: Vec<String> = env::args().collect();
 
-    if args.len() < 3 {
+    if args.len() < 2 {
         eprintln!("Usage:");
         eprintln!(
-            "  {} <input.ll> <output.txt> [llm_catalog.json] [ac_catalog.json]",
+            "  {} <input.ll> [output.txt] [llm_catalog.json] [ac_catalog.json]",
             args[0]
         );
         std::process::exit(1);
@@ -104,18 +104,28 @@ fn main() -> Result<(), Box<dyn Error>> {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("default")).init();
 
     let input_ll = &args[1];
-    let output_txt = &args[2];
 
     // a single module
     let module = Module::from_ir_path(input_ll)
         .map_err(|e| format!("failed to parse LLVM IR file: {}", e))?;
-
-    // write module to file for debugging
-    write_module_to_file(&module, output_txt)?;
-    println!("Wrote parsed module info to: {}", output_txt);
-
-    let analysis = ModuleAnalysis::new(&module);
     println!("Parsed LLVM IR from: {}", input_ll);
+
+    // optionally write the parsed module for debugging
+    if let Some(output_txt) = args.get(2) {
+        write_module_to_file(&module, output_txt)?;
+        println!("Wrote parsed module info to: {}", output_txt);
+    }
+
+    let mut analysis = ModuleAnalysis::new(&module);
+
+    // load context catalogs if both are given, so the analysis records context points
+    let have_catalogs = args.len() >= 5;
+    if have_catalogs {
+        let llm = ll_parser::context_finder::load_signatures(std::path::Path::new(&args[3]))?;
+        let ac = ll_parser::context_finder::load_signatures(std::path::Path::new(&args[4]))?;
+        println!("Loaded {} LLM and {} AC signatures", llm.len(), ac.len());
+        analysis.set_context_catalogs(llm, ac);
+    }
 
     // // print cfg for each function
     // let mut file = std::fs::File::create("cfg.txt")?;
@@ -130,25 +140,16 @@ fn main() -> Result<(), Box<dyn Error>> {
     // analysis.call_graph().print_call_graph();
     // println!("Wrote pointer assignment graph to cg.txt");
 
-    // generate pag
-    analysis
-        .pointer_assignment_graph()
-        .print_pointer_assignment_graph()?;
+    // generate pag (records context points during the analysis if catalogs were set)
+    let pag = analysis.pointer_assignment_graph();
+    pag.print_pointer_assignment_graph()?;
     println!("Wrote pointer assignment graph to pag.txt");
 
-    // find context points (LLM API / access-control call sites) if catalogs given
-    if args.len() >= 5 {
-        let llm = ll_parser::context_finder::load_signatures(std::path::Path::new(&args[3]))?;
-        let ac = ll_parser::context_finder::load_signatures(std::path::Path::new(&args[4]))?;
-
-        let points = ll_parser::context_finder::find_context_points(&module, &llm, &ac);
-        ll_parser::context_finder::print_context_points(&points)?;
-
+    if have_catalogs {
+        ll_parser::context_finder::print_context_points(pag.context_points())?;
         println!(
-            "Found {} context points ({} LLM signatures, {} AC signatures) -> context_points.txt",
-            points.len(),
-            llm.len(),
-            ac.len()
+            "Found {} context points -> context_points.txt",
+            pag.context_points().len()
         );
     }
 

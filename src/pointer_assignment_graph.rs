@@ -1,4 +1,5 @@
 use crate::call_graph::CallGraph;
+use crate::context_finder::{ContextPoint, Signature};
 use crate::ControlFlowGraph;
 use crate::FunctionsByType;
 use llvm_ir::instruction::{InlineAssembly, Instruction};
@@ -378,12 +379,20 @@ pub struct PointerAssignmentGraph<'m> {
     /// these are mostly unwind paths, panic cleanup, and destructor paths.
     /// our goal is normal execution pointer flow rather than unwind/destructor behavior.
     pub skip_cleanup_blocks: bool,
+
+    /// (llm, access-control) catalogs; when set, matched call sites are recorded
+    /// as context points while the analysis visits calls
+    pub context_signatures: Option<(Vec<Signature>, Vec<Signature>)>,
+
+    /// call sites matched against the context catalogs
+    pub context_points: Vec<ContextPoint>,
 }
 
 impl<'m> PointerAssignmentGraph<'m> {
     pub fn new(
         modules: impl IntoIterator<Item = &'m Module>,
         functions_by_type: &FunctionsByType<'m>,
+        context_signatures: Option<(Vec<Signature>, Vec<Signature>)>,
     ) -> Self {
         let start_time: Instant = Instant::now();
 
@@ -451,6 +460,8 @@ impl<'m> PointerAssignmentGraph<'m> {
             memcpy_dst_edges: BTreeMap::new(),
             on_the_fly: true, //TODO: pass in ?
             skip_cleanup_blocks: true,
+            context_signatures,
+            context_points: Vec::new(),
         };
 
         if let Some(main_name) = pag.find_main_function_name() {
@@ -1503,6 +1514,22 @@ impl<'m> PointerAssignmentGraph<'m> {
         // 1. Direct call: make sure call graph has caller -> callee.
         // ------------------------------------------------------------
         if let Some(direct_callee_name) = direct_callee_name {
+            // record a context point if this reachable call site matches a catalog
+            let point = if let Some((llm, ac)) = self.context_signatures.as_ref() {
+                crate::context_finder::match_callsite(
+                    &direct_callee_name,
+                    caller_name,
+                    block_name,
+                    llm,
+                    ac,
+                )
+            } else {
+                None
+            };
+            if let Some(point) = point {
+                self.context_points.push(point);
+            }
+
             // handle special functions if exists
             if self.handle_special_rust_functions(
                 &direct_callee_name,
@@ -2744,6 +2771,10 @@ impl<'m> PointerAssignmentGraph<'m> {
     }
 
     /// print the points-to sets of all nodes in the PAG to a file
+    pub fn context_points(&self) -> &[ContextPoint] {
+        &self.context_points
+    }
+
     pub fn print_points_to_sets(&self) -> Result<(), Box<dyn Error>> {
         let mut file = File::create("points_to.txt")?;
 

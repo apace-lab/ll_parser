@@ -17,7 +17,7 @@ use std::path::Path;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ContextKind {
-    LlmApiCall,
+    LLMAPICalls,
     AccessControl,
 }
 
@@ -81,7 +81,7 @@ pub fn find_context_points(
     let mut points = Vec::new();
 
     for func in &module.functions {
-        let caller = format!("{:#}", demangle(&func.name));
+        let caller = &func.name;
 
         for block in &func.basic_blocks {
             let block_name = format!("{}", block.name);
@@ -89,14 +89,18 @@ pub fn find_context_points(
             for instr in &block.instrs {
                 if let Instruction::Call(call) = instr {
                     if let Some(callee) = callee_symbol(&call.function) {
-                        check_callsite(&callee, &caller, &block_name, llm, ac, &mut points);
+                        if let Some(point) = match_callsite(&callee, caller, &block_name, llm, ac) {
+                            points.push(point);
+                        }
                     }
                 }
             }
 
             if let Terminator::Invoke(invoke) = &block.term {
                 if let Some(callee) = callee_symbol(&invoke.function) {
-                    check_callsite(&callee, &caller, &block_name, llm, ac, &mut points);
+                    if let Some(point) = match_callsite(&callee, caller, &block_name, llm, ac) {
+                        points.push(point);
+                    }
                 }
             }
         }
@@ -105,35 +109,34 @@ pub fn find_context_points(
     points
 }
 
-fn check_callsite(
+/// match a single call site's callee against the catalogs (used both by the
+/// standalone scan above and from the pointer analysis while it visits calls)
+pub fn match_callsite(
     callee_mangled: &str,
     caller: &str,
     block: &str,
     llm: &[Signature],
     ac: &[Signature],
-    points: &mut Vec<ContextPoint>,
-) {
+) -> Option<ContextPoint> {
     let callee = normalize_callee(callee_mangled);
 
-    let (kind, hit) = if let Some(hit) = match_signature(&callee, llm) {
-        (ContextKind::LlmApiCall, hit)
+    let (kind, (sig, strategy)) = if let Some(hit) = match_signature(&callee, llm) {
+        (ContextKind::LLMAPICalls, hit)
     } else if let Some(hit) = match_signature(&callee, ac) {
         (ContextKind::AccessControl, hit)
     } else {
-        return;
+        return None;
     };
 
-    let (sig, strategy) = hit;
-
-    points.push(ContextPoint {
+    Some(ContextPoint {
         kind,
-        function: caller.to_string(),
+        function: format!("{:#}", demangle(&strip_symbol(caller))),
         block: block.to_string(),
         callee,
         matched_fn_name: sig.fn_name.clone(),
         category: sig.category.clone(),
         strategy,
-    });
+    })
 }
 
 /// the callee symbol of a call/invoke, if it is a direct global reference
@@ -148,9 +151,10 @@ fn callee_symbol(function: &Either<llvm_ir::instruction::InlineAssembly, Operand
     }
 }
 
-/// demangle and drop the trailing hash and turbofish so paths compare cleanly
+/// strip any symbol prefix, demangle, and drop the trailing hash and turbofish
 fn normalize_callee(mangled: &str) -> String {
-    let demangled = format!("{:#}", demangle(mangled));
+    let clean = strip_symbol(mangled);
+    let demangled = format!("{:#}", demangle(&clean));
     strip_turbofish(&demangled)
 }
 
@@ -214,7 +218,7 @@ pub fn print_context_points(points: &[ContextPoint]) -> Result<(), Box<dyn Error
 
     for point in points {
         let kind = match point.kind {
-            ContextKind::LlmApiCall => "LLM_API",
+            ContextKind::LLMAPICalls => "LLM_API",
             ContextKind::AccessControl => "ACCESS_CONTROL",
         };
 

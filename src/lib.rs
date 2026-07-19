@@ -40,6 +40,8 @@ pub struct ModuleAnalysis<'m> {
     functions_by_type: SimpleCache<FunctionsByType<'m>>,
     /// Map from function name to the `FunctionAnalysis` for that function
     fn_analyses: HashMap<&'m str, FunctionAnalysis<'m>>,
+    /// optional (llm, access-control) catalogs used to record context points
+    context_catalogs: Option<(Vec<context_finder::Signature>, Vec<context_finder::Signature>)>,
 }
 
 impl<'m> ModuleAnalysis<'m> {
@@ -58,7 +60,18 @@ impl<'m> ModuleAnalysis<'m> {
                 .iter()
                 .map(|f| (f.name.as_str(), FunctionAnalysis::new(f)))
                 .collect(),
+            context_catalogs: None,
         }
+    }
+
+    /// Provide the (llm, access-control) catalogs so the pointer analysis records
+    /// context points for matched call sites. Call before `pointer_assignment_graph`.
+    pub fn set_context_catalogs(
+        &mut self,
+        llm: Vec<context_finder::Signature>,
+        ac: Vec<context_finder::Signature>,
+    ) {
+        self.context_catalogs = Some((llm, ac));
     }
 
     /// Get a reference to the `Module` which the `ModuleAnalysis` was created
@@ -81,7 +94,11 @@ impl<'m> ModuleAnalysis<'m> {
         self.pointer_assignment_graph.get_or_insert_with(move || {
             let functions_by_type = self.functions_by_type();
             debug!("computing single-module pointer assignment graph");
-            PointerAssignmentGraph::new(std::iter::once(self.module), &functions_by_type)
+            PointerAssignmentGraph::new(
+                std::iter::once(self.module),
+                &functions_by_type,
+                self.context_catalogs.clone(),
+            )
         })
     }
 
@@ -169,7 +186,7 @@ impl<'m> CrossModuleAnalysis<'m> {
         self.pointer_assignment_graph.get_or_insert_with(move || {
             let functions_by_type = self.functions_by_type();
             debug!("computing multi-module pointer assignment graph");
-            PointerAssignmentGraph::new(self.modules(), &functions_by_type)
+            PointerAssignmentGraph::new(self.modules(), &functions_by_type, None)
         })
     }
 

@@ -57,17 +57,17 @@ call sites. we match the demangled callee against the `fn_name`s in
 `datasets/llm_api_functions.json` and `datasets/ac_functions.json` (suffix match,
 then last-two-segment short-name). results go to `context_points.txt`.
 ```bash
-cargo run -- tests/llm_ac_demo.ll parsed_module.txt \
+cargo run -- examples/llm_ac_demo.ll parsed_module.txt \
     <AFG>/datasets/llm_api_functions.json \
     <AFG>/datasets/ac_functions.json
 ```
 without the two catalog args it runs as before (no finder).
 
-`tests/llm_ac_demo.ll` is a small fixture: the two-user shared-cache demo plus a
+`examples/llm_ac_demo.ll` is a small fixture: the two-user shared-cache demo plus a
 stub llm call (`async_openai::chat::Chat::create`) and an access-control call
 (`actix_identity::Identity::id`). regenerate it with an llvm-19 rustc:
 ```bash
-rustup run nightly-2025-02-01 rustc tests/llm_ac_demo.rs --emit=llvm-ir -o tests/llm_ac_demo.ll
+rustup run nightly-2025-02-01 rustc examples/llm_ac_demo.rs --emit=llvm-ir -o examples/llm_ac_demo.ll
 ```
 
 

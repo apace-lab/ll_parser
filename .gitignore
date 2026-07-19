@@ -1,7 +1,9 @@
 *.log
 *.txt
 target
-examples
+examples/*
+!examples/llm_ac_demo.rs
+!examples/llm_ac_demo.ll
 
 
 
