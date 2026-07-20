@@ -1,8 +1,7 @@
 *.log
 *.txt
 target
+examples/*
+!examples/llm_ac_demo.rs
+!examples/llm_ac_demo.ll
 taint_config.json
-
-
-
-
