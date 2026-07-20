@@ -1,4 +1,5 @@
 use crate::call_graph::CallGraph;
+use crate::context_finder;
 use crate::context_finder::{ContextPoint, Signature};
 use crate::ControlFlowGraph;
 use crate::FunctionsByType;
@@ -10,6 +11,7 @@ use std::collections::{BTreeMap, BTreeSet, HashMap, VecDeque};
 use std::error::Error;
 use std::fs::File;
 use std::io::Write;
+use std::println;
 use std::time::Instant;
 
 /// field-sensitive: to avoid circular dependency in gep, where %x = gep(%a, ...), then %a = %x
@@ -482,7 +484,7 @@ impl<'m> PointerAssignmentGraph<'m> {
         // pag.discover_all_constraints();
         pag.discover_reachable_constraints();
         while pag.worklist.len() > 0 {
-            println!(
+            debug!(
                 "PointerAssignmentGraph::new: discovered {} new edges in worklist",
                 pag.worklist.len(),
             );
@@ -2981,6 +2983,13 @@ impl<'m> PointerAssignmentGraph<'m> {
         self.print_node_kind_statistics();
         self.print_edge_kind_statistics();
         // self.print_vtable_function_refs();
+
+        if self.context_signatures.is_some() {
+            let _ = context_finder::print_context_points(self.context_points());
+            println!("=== Context Statistics ===");
+            println!("context points: {}", self.context_points().len());
+        }
+        println!()
     }
 
     fn print_edge_kind_statistics(&self) {

@@ -6,6 +6,14 @@ use std::io::Write;
 
 use ll_parser::ModuleAnalysis;
 
+fn has_flag(args: &[String], flag: &str) -> bool {
+    args.iter().any(|arg| arg == flag)
+}
+
+fn get_flag_value<'a>(args: &'a [String], flag_prefix: &str) -> Option<&'a str> {
+    args.iter().find_map(|arg| arg.strip_prefix(flag_prefix))
+}
+
 fn write_module_to_file(module: &Module, output_txt: &str) -> Result<(), Box<dyn Error>> {
     let mut file = File::create(output_txt)?;
 
@@ -111,46 +119,72 @@ fn main() -> Result<(), Box<dyn Error>> {
     println!("Parsed LLVM IR from: {}", input_ll);
 
     // optionally write the parsed module for debugging
-    if let Some(output_txt) = args.get(2) {
+    if has_flag(&args, "--info") {
+        let output_txt = "parsed_module.txt";
         write_module_to_file(&module, output_txt)?;
         println!("Wrote parsed module info to: {}", output_txt);
     }
 
     let mut analysis = ModuleAnalysis::new(&module);
 
-    // load context catalogs if both are given, so the analysis records context points
-    let have_catalogs = args.len() >= 5;
-    if have_catalogs {
-        let llm = ll_parser::context_finder::load_signatures(std::path::Path::new(&args[3]))?;
-        let ac = ll_parser::context_finder::load_signatures(std::path::Path::new(&args[4]))?;
-        println!("Loaded {} LLM and {} AC signatures", llm.len(), ac.len());
-        analysis.set_context_catalogs(llm, ac);
+    // print cfg for each function: default from llvm-ir
+    if has_flag(&args, "--cfg") {
+        let mut file = std::fs::File::create("cfg.txt")?;
+        for func in &module.functions {
+            let fn_analysis = analysis.fn_analysis(&func.name);
+            let cfg = fn_analysis.control_flow_graph();
+
+            cfg.print_cfg(&func.name, &mut file)?;
+        }
+        println!("Wrote control flow graph to cfg.txt");
     }
 
-    // // print cfg for each function
-    // let mut file = std::fs::File::create("cfg.txt")?;
-    // for func in &module.functions {
-    //     let fn_analysis = analysis.fn_analysis(&func.name);
-    //     let cfg = fn_analysis.control_flow_graph();
+    // print cg: default from llvm-ir
+    if has_flag(&args, "--cg") {
+        let _ = analysis.call_graph().print_call_graph();
+        println!("Wrote pointer assignment graph to cg.txt");
+    }
 
-    //     cfg.print_cfg(&func.name, &mut file)?;
-    // }
-    // println!("Wrote control flow graph to cfg.txt");
+    // load context catalogs if both are given, so the analysis records context points
+    let llm_api_path = get_flag_value(&args, "--api=");
+    let ac_path = get_flag_value(&args, "--ac=");
 
-    // analysis.call_graph().print_call_graph();
-    // println!("Wrote pointer assignment graph to cg.txt");
+    match (llm_api_path, ac_path) {
+        (Some(llm_api_path), Some(ac_path)) => {
+            let llm_api =
+                ll_parser::context_finder::load_signatures(std::path::Path::new(llm_api_path))?;
+            let ac = ll_parser::context_finder::load_signatures(std::path::Path::new(ac_path))?;
+            println!(
+                "Loaded {} LLM and {} AC signatures",
+                llm_api.len(),
+                ac.len()
+            );
+            analysis.set_context_catalogs(llm_api, ac);
+        }
+
+        // TODO: we should be able to only take api or ac. will be handled for later
+        (Some(_), None) => {
+            eprintln!("Error: --api was provided, but --ac is missing.");
+            eprintln!("Usage: cargo run -- input.ll --api=api.txt --ac=ac.txt");
+            return Ok(());
+        }
+
+        (None, Some(_)) => {
+            eprintln!("Error: --ac was provided, but --api is missing.");
+            eprintln!("Usage: cargo run -- input.ll --api=api.txt --ac=ac.txt");
+            return Ok(());
+        }
+
+        (None, None) => {
+            // No context catalogs provided.
+        }
+    }
 
     // generate pag (records context points during the analysis if catalogs were set)
-    let pag = analysis.pointer_assignment_graph();
-    pag.print_pointer_assignment_graph()?;
-    println!("Wrote pointer assignment graph to pag.txt");
-
-    if have_catalogs {
-        ll_parser::context_finder::print_context_points(pag.context_points())?;
-        println!(
-            "Found {} context points -> context_points.txt",
-            pag.context_points().len()
-        );
+    if has_flag(&args, "--pag") {
+        let pag = analysis.pointer_assignment_graph();
+        pag.print_pointer_assignment_graph()?;
+        println!("Wrote pointer assignment graph to pag.txt");
     }
 
     Ok(())

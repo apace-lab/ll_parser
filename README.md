@@ -30,44 +30,66 @@ Or use `rustc -vV | grep LLVM` to check compatiblity
 
 
 ## how to run 
+to build this project:
 ```bash
 cd ll_parser
 cargo build 
+``` 
 
-cd hello_world
+to generate a .ll for a `hello_world` project as the input of `ll_parser`:
+```bash
+cd examples/hello_world
 rustc src/main.rs --emit=llvm-ir -o hello.ll
+``` 
 
-cd ../ll_parser
-RUSTFLAGS=-Awarnings cargo run -q -- hello_world/hello.ll parsed_module.txt
-```
-to silence all warnings ... 
-or 
+to silence all warnings when running our tool:  
 ```bash
-cargo run -- hello_world/hello.ll parsed_module.txt
+cd ../..
+RUSTFLAGS=-Awarnings cargo run -q -- tests/hello.ll 
+```
+or just run our tool:
+```bash
+cargo run -- hello_world/hello.ll
+```
+or to see all debug info from our tool:
+```bash
+RUST_LOG=ll_parser=debug cargo run -- tests/demo.ll 2> debug.log
+```
+with the following flags:
+```bash
+--info: print parsed module info to parsed_modul.txt
+--cfg: print fg for each function in a module to cfg.txt (default from llvm-ir)
+--cg: print cg for a module to cg.txt (default from llvm-ir)
+--pag: print points-to constraints to pag.txt, points-to sets to points_to.txt and statistics to console
+--api=signatures/llm_api_functions.json: load signatures for LLM API calls from our catalogs; if provided, will be used as context for pag
+--ac=signatures/ac_functions.json: load signatures for access controls from our catalogs; if provided, will be used as context for pag
 ```
 
+example command:
 ```bash
-RUST_LOG=ll_parser=debug cargo run -- tests/demo.ll parsed_module.txt 2> debug.log
+cargo run -- tests/llm_ac_demo.ll --pag --api=signatures/llm_api_functions.json --ac=signatures/ac_functions.json
 ```
+
 
 
 ### find context points (LLM API / access control)
-pass the AFG catalogs as two extra args to also locate llm api and access-control
+pass the catalogs as two extra args to also locate llm api and access-control
 call sites. we match the demangled callee against the `fn_name`s in
-`datasets/llm_api_functions.json` and `datasets/ac_functions.json` (suffix match,
+`signatures/llm_api_functions.json` and `signatures/ac_functions.json` (suffix match,
 then last-two-segment short-name). results go to `context_points.txt`.
 ```bash
-cargo run -- examples/llm_ac_demo.ll parsed_module.txt \
-    <AFG>/datasets/llm_api_functions.json \
-    <AFG>/datasets/ac_functions.json
+cargo run -- tests/llm_ac_demo.ll parsed_module.txt\
+    signatures/llm_api_functions.json \
+    signatures/ac_functions.json
 ```
 without the two catalog args it runs as before (no finder).
 
-`examples/llm_ac_demo.ll` is a small fixture: the two-user shared-cache demo plus a
+`tests/llm_ac_demo.ll` is a small fixture: the two-user shared-cache demo plus a
 stub llm call (`async_openai::chat::Chat::create`) and an access-control call
 (`actix_identity::Identity::id`). regenerate it with an llvm-19 rustc:
 ```bash
-rustup run nightly-2025-02-01 rustc examples/llm_ac_demo.rs --emit=llvm-ir -o examples/llm_ac_demo.ll
+cd examples/llm_ac_demo/
+rustc main.rs --emit=llvm-ir -o llm_ac_demo.ll
 ```
 
 
@@ -117,38 +139,6 @@ then run `cargo update -p indexmap --precise 2.7.1` to downgrade the crate
 
 
 
-## simplified rules
-
-```rust
-// %p = alloca ...
-// p points to object
-AllocaObject -> ValueName(%p)    AddressOf
-
-// %x = load ptr, ptr %p
-// x gets whatever *p points to
-Operand(%p) -> ValueName(%x)     Load
-
-// store ptr %x, ptr %p
-// *p gets x
-Operand(%x) -> Operand(%p)       Store
-
-// %q = gep %p ...
-// q gets p, approximately
-Operand(%p) -> ValueName(%q)     GEP
-
-// %q = bitcast %p
-Operand(%p) -> ValueName(%q)     Copy
-
-// phi/select
-Operand(input) -> ValueName(dst) Copy
-
-// actual -> formal
-Operand(actual) -> FormalParameter(...) Copy
-
-// function return -> call result
-FunctionReturn(...) -> ValueName(dest) Copy
-```
-
 
 ## speciak handling 
 - `on_the_fly`
@@ -169,7 +159,7 @@ FunctionReturn(...) -> ValueName(dest) Copy
   - skip visiting certain functions: see console output "[PAG] enqueue newly reachable function xxx" (done)
     - e.g., _ZN4core3cmp6min_by17ha4cfc0b0d5a7f758E
   - handle special rust functions
-    - e.g., memcpy 
+    - e.g., memcpy (done)
   - adhoc for tokio and certain functions (skip the long and unnecessary callchain and their constraints) 
     - but make sure we can still reach our closures, e.g., _ZN4main16spawn_user_query28_$u7b$$u7b$closure$u7d$$u7d$17hb7b958eb69c4a9bcE
 
@@ -227,3 +217,18 @@ bb17:                                             ; preds = %bb16
 ; invoke main::call_chatgpt_api
   invoke void @_ZN4main16call_chatgpt_api17hc879cdea2c183e1dE(ptr sret(%"alloc::string::String") align 8 %answer1, ptr align 1 %_33.0, i64 %_33.1)
           to label %bb18 unwind label %cleanup6
+
+
+
+
+
+
+
+
+### To model: LLM API call through curl with token
+cannot find context point for such pattern, see demo-api.ll
+
+skip/create a link for functions like `json_escape` in `examples/demo-api/src/main.rs`.
+
+
+
