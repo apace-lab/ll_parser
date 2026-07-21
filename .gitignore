@@ -2,6 +2,6 @@
 *.txt
 target
 examples/*
-!examples/llm_ac_demo.rs
-!examples/llm_ac_demo.ll
+!examples/llm_ac_demo
+!examples/llm_ac_demo/**
 taint_config.json
