@@ -393,6 +393,10 @@ pub struct PointerAssignmentGraph<'m> {
 
     /// call sites matched against the context catalogs
     pub context_points: Vec<ContextPoint>,
+
+    /// function whose local SSA namespace is currently being materialized; used
+    /// to keep same-named locals (e.g. %7) in different functions from aliasing
+    pub current_function: String,
 }
 
 impl<'m> PointerAssignmentGraph<'m> {
@@ -469,6 +473,7 @@ impl<'m> PointerAssignmentGraph<'m> {
             skip_cleanup_blocks: true,
             context_signatures,
             context_points: Vec::new(),
+            current_function: String::new(),
         };
 
         if let Some(main_name) = pag.find_main_function_name() {
@@ -744,6 +749,7 @@ impl<'m> PointerAssignmentGraph<'m> {
     /// visit ir instructions and create constraints
     fn discover_constraints_in_function(&mut self, func: &'m llvm_ir::Function) {
         let function_name = func.name.clone();
+        self.current_function = function_name.clone();
 
         let skip = self.compute_cleanup_blocks_with_cfg(func);
 
@@ -1150,8 +1156,25 @@ impl<'m> PointerAssignmentGraph<'m> {
     }
 
     /// create a pag node if not exist in self.nodes; otherwise, return the node
+    /// function-scoped identity for local SSA values: `%7` in different
+    /// functions must not merge into one node (that over-approximation is what
+    /// makes the points-to sets explode at scale). value/local-operand nodes are
+    /// keyed under the current function; all other kinds carry a globally unique
+    /// key already, so they fall through to `PANodeKind::key`.
+    fn qualified_key(&self, kind: &PANodeKind<'m>) -> String {
+        match kind {
+            PANodeKind::ValueName(name) => {
+                format!("ssa::{}::{}", self.current_function, name)
+            }
+            PANodeKind::Operand(Operand::LocalOperand { name, .. }) => {
+                format!("ssa::{}::{}", self.current_function, name)
+            }
+            _ => kind.key(),
+        }
+    }
+
     pub fn get_or_create_node(&mut self, nodekind: PANodeKind<'m>) -> PANodeId {
-        let key = nodekind.key();
+        let key = self.qualified_key(&nodekind);
 
         if let Some(id) = self.node_ids.get(&key) {
             debug!(
@@ -2549,6 +2572,8 @@ impl<'m> PointerAssignmentGraph<'m> {
                 changed = true;
             }
 
+            // args/result of this call live in the caller's SSA namespace
+            self.current_function = callsite.caller.clone();
             self.add_constraints_for_call(
                 &callsite.caller,
                 &callsite.block,
@@ -2604,6 +2629,8 @@ impl<'m> PointerAssignmentGraph<'m> {
                     changed = true;
                 }
 
+                // args/result of this call live in the caller's SSA namespace
+                self.current_function = callsite.caller.clone();
                 self.add_constraints_for_call(
                     &callsite.caller,
                     &callsite.block,
