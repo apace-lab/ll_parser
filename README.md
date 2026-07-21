@@ -67,29 +67,28 @@ with the following flags:
 
 example command:
 ```bash
-cargo run -- tests/llm_ac_demo.ll --pag --api=signatures/llm_api_functions.json --ac=signatures/ac_functions.json
+cargo run -- examples/llm_ac_demo/llm_ac_demo.ll --pag --api=signatures/llm_api_functions.json --ac=signatures/ac_functions.json
 ```
 
 
 
 ### find context points (LLM API / access control)
-pass the catalogs as two extra args to also locate llm api and access-control
-call sites. we match the demangled callee against the `fn_name`s in
-`signatures/llm_api_functions.json` and `signatures/ac_functions.json` (suffix match,
-then last-two-segment short-name). results go to `context_points.txt`.
-```bash
-cargo run -- tests/llm_ac_demo.ll parsed_module.txt\
-    signatures/llm_api_functions.json \
-    signatures/ac_functions.json
-```
-without the two catalog args it runs as before (no finder).
+when `--api=` and `--ac=` are both given (see flags above), the analysis also
+locates llm api and access-control call sites: we match the demangled callee
+against the `fn_name`s in `signatures/llm_api_functions.json` and
+`signatures/ac_functions.json` (suffix match, then last-two-segment short-name).
+results go to `context_points.txt` and each matched call site is listed with the
+points-to sets of its argument and result values (resolved after the fixed
+point), so context is tied back into the pointer analysis.
 
-`tests/llm_ac_demo.ll` is a small fixture: the two-user shared-cache demo plus a
-stub llm call (`async_openai::chat::Chat::create`) and an access-control call
-(`actix_identity::Identity::id`). regenerate it with an llvm-19 rustc:
+`examples/llm_ac_demo/` is a small self-contained fixture: the two-user
+shared-cache demo plus stubbed llm calls (async-openai, ollama) and
+access-control calls (jsonwebtoken, bcrypt, argon2, ldap3, oauth2,
+actix-identity, casbin) whose paths match the catalogs. regenerate the `.ll`
+with an llvm-19 rustc:
 ```bash
 cd examples/llm_ac_demo/
-rustc main.rs --emit=llvm-ir -o llm_ac_demo.ll
+rustc main.rs --crate-name llm_ac_demo --emit=llvm-ir -o llm_ac_demo.ll
 ```
 
 

@@ -11,8 +11,6 @@ use llvm_ir::{Constant, Module, Operand};
 use rustc_demangle::demangle;
 use std::collections::HashMap;
 use std::error::Error;
-use std::fs::File;
-use std::io::Write;
 use std::path::Path;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -36,6 +34,11 @@ pub struct ContextPoint {
     pub matched_fn_name: String,
     pub category: Option<String>,
     pub strategy: &'static str,
+    /// PAG node ids for this call's argument values (filled in by the pointer
+    /// analysis); their points-to sets are resolved after the fixed point
+    pub arg_nodes: Vec<usize>,
+    /// PAG node id for this call's result value, if any
+    pub result_node: Option<usize>,
 }
 
 /// load fn_name signatures from an AFG catalog json, skipping the _schema_notes key
@@ -118,11 +121,12 @@ pub fn match_callsite(
     llm: &[Signature],
     ac: &[Signature],
 ) -> Option<ContextPoint> {
-    let callee = normalize_callee(callee_mangled);
+    let demangled = format!("{:#}", demangle(&strip_symbol(callee_mangled)));
+    let candidates = candidate_paths(&demangled);
 
-    let (kind, (sig, strategy)) = if let Some(hit) = match_signature(&callee, llm) {
+    let (kind, (sig, strategy)) = if let Some(hit) = match_any(&candidates, llm) {
         (ContextKind::LLMAPICalls, hit)
-    } else if let Some(hit) = match_signature(&callee, ac) {
+    } else if let Some(hit) = match_any(&candidates, ac) {
         (ContextKind::AccessControl, hit)
     } else {
         return None;
@@ -132,10 +136,12 @@ pub fn match_callsite(
         kind,
         function: format!("{:#}", demangle(&strip_symbol(caller))),
         block: block.to_string(),
-        callee,
+        callee: demangled,
         matched_fn_name: sig.fn_name.clone(),
         category: sig.category.clone(),
         strategy,
+        arg_nodes: Vec::new(),
+        result_node: None,
     })
 }
 
@@ -151,11 +157,66 @@ fn callee_symbol(function: &Either<llvm_ir::instruction::InlineAssembly, Operand
     }
 }
 
-/// strip any symbol prefix, demangle, and drop the trailing hash and turbofish
-fn normalize_callee(mangled: &str) -> String {
-    let clean = strip_symbol(mangled);
-    let demangled = format!("{:#}", demangle(&clean));
-    strip_turbofish(&demangled)
+/// candidate paths to match a demangled callee against the catalogs. covers
+/// direct calls / inherent methods (with generics stripped) and, for trait
+/// dispatch `<Type as Trait>::method`, both `Type::method` and `Trait::method`.
+fn candidate_paths(demangled: &str) -> Vec<String> {
+    let mut out = vec![strip_turbofish(demangled)];
+
+    if let Some(gt) = matching_angle(demangled) {
+        let inner = &demangled[1..gt]; // "Type as Trait"
+        let rest = &demangled[gt + 1..]; // "::method..."
+        if let Some((ty, tr)) = split_as_top_level(inner) {
+            out.push(strip_turbofish(&format!("{}{}", ty, rest)));
+            out.push(strip_turbofish(&format!("{}{}", tr, rest)));
+        }
+    }
+
+    out
+}
+
+/// split `Type as Trait` at the top-level ` as ` (ignoring any inside nested `<...>`)
+fn split_as_top_level(inner: &str) -> Option<(&str, &str)> {
+    let bytes = inner.as_bytes();
+    let mut depth = 0i32;
+    let mut i = 0;
+
+    while i < bytes.len() {
+        match bytes[i] {
+            b'<' => depth += 1,
+            b'>' => depth -= 1,
+            b' ' if depth == 0 && inner[i..].starts_with(" as ") => {
+                return Some((&inner[..i], &inner[i + 4..]));
+            }
+            _ => {}
+        }
+        i += 1;
+    }
+
+    None
+}
+
+/// if `s` starts with '<', return the byte index of its matching '>'
+fn matching_angle(s: &str) -> Option<usize> {
+    if !s.starts_with('<') {
+        return None;
+    }
+
+    let mut depth = 0usize;
+    for (i, c) in s.char_indices() {
+        match c {
+            '<' => depth += 1,
+            '>' => {
+                depth -= 1;
+                if depth == 0 {
+                    return Some(i);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    None
 }
 
 fn strip_symbol(name: &str) -> String {
@@ -182,20 +243,25 @@ fn strip_turbofish(s: &str) -> String {
     out
 }
 
-/// suffix match (handles the crate prefix) first, then last-two-segment short-name
-fn match_signature<'a>(
-    callee: &str,
+/// try each candidate against the catalog: suffix match (handles the crate
+/// prefix) first across all candidates, then last-two-segment short-name
+fn match_any<'a>(
+    candidates: &[String],
     signatures: &'a [Signature],
 ) -> Option<(&'a Signature, &'static str)> {
-    for sig in signatures {
-        if callee == sig.fn_name || callee.ends_with(&format!("::{}", sig.fn_name)) {
-            return Some((sig, "suffix"));
+    for cand in candidates {
+        for sig in signatures {
+            if cand == &sig.fn_name || cand.ends_with(&format!("::{}", sig.fn_name)) {
+                return Some((sig, "suffix"));
+            }
         }
     }
 
-    for sig in signatures {
-        if last_two(callee) == last_two(&sig.fn_name) {
-            return Some((sig, "short-name"));
+    for cand in candidates {
+        for sig in signatures {
+            if last_two(cand) == last_two(&sig.fn_name) {
+                return Some((sig, "short-name"));
+            }
         }
     }
 
@@ -209,27 +275,151 @@ fn last_two(path: &str) -> &str {
     }
 }
 
-pub fn print_context_points(points: &[ContextPoint]) -> Result<(), Box<dyn Error>> {
-    let mut file = File::create("context_points.txt")?;
+#[cfg(test)]
+mod tests {
+    use super::*;
 
-    writeln!(file, "=== Context Points ===")?;
-    writeln!(file, "total: {}", points.len())?;
-    writeln!(file)?;
-
-    for point in points {
-        let kind = match point.kind {
-            ContextKind::LLMAPICalls => "LLM_API",
-            ContextKind::AccessControl => "ACCESS_CONTROL",
-        };
-
-        let category = point.category.as_deref().unwrap_or("-");
-
-        writeln!(
-            file,
-            "  [{}] {} in {}::{}  (matched {} / {} / {})",
-            kind, point.callee, point.function, point.block, point.matched_fn_name, category, point.strategy
-        )?;
+    fn sig(fn_name: &str) -> Signature {
+        Signature {
+            fn_name: fn_name.to_string(),
+            category: None,
+        }
     }
 
-    Ok(())
+    /// does any candidate for `demangled` match a catalog of just `fn_name`?
+    fn matches(demangled: &str, fn_name: &str) -> bool {
+        match_any(&candidate_paths(demangled), &[sig(fn_name)]).is_some()
+    }
+
+    // ---- direct calls / inherent methods ----
+
+    #[test]
+    fn direct_free_function() {
+        assert!(matches("app::bcrypt::verify", "bcrypt::verify"));
+    }
+
+    #[test]
+    fn inherent_method() {
+        assert!(matches(
+            "app::ldap3::LdapConn::simple_bind",
+            "ldap3::LdapConn::simple_bind"
+        ));
+    }
+
+    #[test]
+    fn strips_generics_on_type() {
+        assert!(matches(
+            "app::oauth2::Client<Config>::exchange_code",
+            "oauth2::Client::exchange_code"
+        ));
+    }
+
+    #[test]
+    fn strips_method_level_generics() {
+        assert!(matches("app::foo::Bar::baz<i32>", "foo::Bar::baz"));
+    }
+
+    // ---- trait dispatch `<Type as Trait>::method` ----
+
+    #[test]
+    fn trait_dispatch_yields_both_type_and_trait_paths() {
+        let cands = candidate_paths(
+            "<app::argon2::Argon2 as app::argon2::PasswordVerifier>::verify_password",
+        );
+        assert!(
+            cands.iter().any(|c| c.ends_with("argon2::Argon2::verify_password")),
+            "{:?}",
+            cands
+        );
+        assert!(
+            cands.iter().any(|c| c.ends_with("argon2::PasswordVerifier::verify_password")),
+            "{:?}",
+            cands
+        );
+    }
+
+    #[test]
+    fn trait_dispatch_matches_trait_entry() {
+        assert!(matches(
+            "<app::argon2::Argon2 as app::argon2::PasswordVerifier>::verify_password",
+            "argon2::PasswordVerifier::verify_password"
+        ));
+    }
+
+    #[test]
+    fn trait_dispatch_matches_type_entry() {
+        // catalog entry keyed on the concrete type instead of the trait
+        assert!(matches(
+            "<app::casbin::Enforcer as app::casbin::CoreApi>::enforce",
+            "casbin::Enforcer::enforce"
+        ));
+        // and on the trait (how our catalog actually keys casbin)
+        assert!(matches(
+            "<app::casbin::Enforcer as app::casbin::CoreApi>::enforce",
+            "casbin::CoreApi::enforce"
+        ));
+    }
+
+    // ---- nesting / generics on both sides ----
+
+    #[test]
+    fn nested_generics_on_type() {
+        assert!(matches(
+            "<app::Foo<app::Bar<i32>> as app::Trait>::method",
+            "Trait::method"
+        ));
+        assert!(matches(
+            "<app::Foo<app::Bar<i32>> as app::Trait>::method",
+            "Foo::method"
+        ));
+    }
+
+    #[test]
+    fn generics_on_both_type_and_trait() {
+        assert!(matches(
+            "<app::Client<Config> as app::TokenExchange<Foo>>::exchange_code",
+            "TokenExchange::exchange_code"
+        ));
+        assert!(matches(
+            "<app::Client<Config> as app::TokenExchange<Foo>>::exchange_code",
+            "Client::exchange_code"
+        ));
+    }
+
+    #[test]
+    fn nested_trait_projection_splits_at_outer_as() {
+        // `<<T as A>::B as C>::method` must split at the OUTER ` as ` (C), not A
+        let cands =
+            candidate_paths("<<app::T as app::A>::B as app::C>::method");
+        assert!(
+            cands.iter().any(|c| c.ends_with("app::C::method")),
+            "{:?}",
+            cands
+        );
+        // must NOT wrongly treat A as the trait
+        assert!(
+            !cands.iter().any(|c| c.ends_with("app::A::method")),
+            "{:?}",
+            cands
+        );
+    }
+
+    // ---- negatives ----
+
+    #[test]
+    fn no_match_for_unrelated_callee() {
+        assert!(!matches("app::alloc::vec::Vec::push", "jsonwebtoken::decode"));
+    }
+
+    #[test]
+    fn no_match_on_partial_segment() {
+        // `decode_header` must not match a `decode` entry (segment boundary)
+        assert!(!matches("app::jsonwebtoken::decode_header", "jsonwebtoken::decode"));
+    }
+
+    #[test]
+    fn matching_angle_requires_leading_bracket() {
+        assert_eq!(matching_angle("app::foo::bar"), None);
+        assert!(matching_angle("<a as b>::c").is_some());
+    }
 }

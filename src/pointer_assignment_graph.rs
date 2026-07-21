@@ -1,6 +1,5 @@
 use crate::call_graph::CallGraph;
-use crate::context_finder;
-use crate::context_finder::{ContextPoint, Signature};
+use crate::context_finder::{ContextKind, ContextPoint, Signature};
 use crate::ControlFlowGraph;
 use crate::FunctionsByType;
 use llvm_ir::instruction::{InlineAssembly, Instruction};
@@ -1591,7 +1590,18 @@ impl<'m> PointerAssignmentGraph<'m> {
             } else {
                 None
             };
-            if let Some(point) = point {
+            if let Some(mut point) = point {
+                // record the PAG nodes for this call's args/result so their
+                // points-to sets can be resolved after the fixed point
+                let args = self.get_callsite_arguments(&callsite_kind);
+                for (op, _) in args {
+                    let n = self.get_or_create_node(PANodeKind::Operand(op));
+                    point.arg_nodes.push(n);
+                }
+                if let Some(result) = self.get_callsite_result(&callsite_kind) {
+                    point.result_node =
+                        Some(self.get_or_create_node(PANodeKind::ValueName(result)));
+                }
                 self.context_points.push(point);
             }
 
@@ -2985,11 +2995,76 @@ impl<'m> PointerAssignmentGraph<'m> {
         // self.print_vtable_function_refs();
 
         if self.context_signatures.is_some() {
-            let _ = context_finder::print_context_points(self.context_points());
+            let _ = self.print_context_points();
             println!("=== Context Statistics ===");
             println!("context points: {}", self.context_points().len());
         }
         println!()
+    }
+
+    /// enriched context report: each matched call site plus the points-to sets of
+    /// its argument and result values (resolved after the fixed point). this is
+    /// what connects the located LLM/AC call sites to the pointer analysis.
+    pub fn print_context_points(&self) -> Result<(), Box<dyn Error>> {
+        let mut file = File::create("context_points.txt")?;
+
+        writeln!(file, "=== Context Points ===")?;
+        writeln!(file, "total: {}", self.context_points.len())?;
+        writeln!(file)?;
+
+        for point in &self.context_points {
+            let kind = match point.kind {
+                ContextKind::LLMAPICalls => "LLM_API",
+                ContextKind::AccessControl => "ACCESS_CONTROL",
+            };
+            let category = point.category.as_deref().unwrap_or("-");
+
+            writeln!(
+                file,
+                "  [{}] {} in {}::{}  (matched {} / {} / {})",
+                kind,
+                point.callee,
+                point.function,
+                point.block,
+                point.matched_fn_name,
+                category,
+                point.strategy
+            )?;
+
+            for (i, &n) in point.arg_nodes.iter().enumerate() {
+                writeln!(file, "      arg{}: {}", i, self.context_node_pts(n))?;
+            }
+            if let Some(n) = point.result_node {
+                writeln!(file, "      result: {}", self.context_node_pts(n))?;
+            }
+            writeln!(file)?;
+        }
+
+        Ok(())
+    }
+
+    /// "n{id}:{key} -> { n{p}, ... }" for a node and its points-to set,
+    /// capped so an over-approximated node doesn't dump thousands of ids
+    fn context_node_pts(&self, id: PANodeId) -> String {
+        let Some(node) = self.nodes.get(&id) else {
+            return format!("n{}", id);
+        };
+
+        const CAP: usize = 12;
+        let total = node.points_to.len();
+        let shown: Vec<String> = node
+            .points_to
+            .iter()
+            .take(CAP)
+            .map(|p| format!("n{}", p))
+            .collect();
+        let more = if total > CAP {
+            format!(", ... ({} total)", total)
+        } else {
+            String::new()
+        };
+
+        format!("{} -> {{{}{}}}", node, shown.join(", "), more)
     }
 
     fn print_edge_kind_statistics(&self) {

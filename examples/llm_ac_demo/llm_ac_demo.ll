@@ -120,25 +120,33 @@ target triple = "arm64-apple-macosx11.0.0"
 @vtable.6 = private unnamed_addr constant <{ [24 x i8], ptr, ptr, ptr }> <{ [24 x i8] c"\00\00\00\00\00\00\00\00\08\00\00\00\00\00\00\00\08\00\00\00\00\00\00\00", ptr @"_ZN4core3ops8function6FnOnce40call_once$u7b$$u7b$vtable.shim$u7d$$u7d$17hcce7715893f66df1E", ptr @"_ZN9hashbrown3raw21RawTable$LT$T$C$A$GT$14reserve_rehash28_$u7b$$u7b$closure$u7d$$u7d$17hf5d523635d33df8bE", ptr @"_ZN9hashbrown3raw21RawTable$LT$T$C$A$GT$14reserve_rehash28_$u7b$$u7b$closure$u7d$$u7d$17hf5d523635d33df8bE" }>, align 8
 @vtable.7 = private unnamed_addr constant <{ [24 x i8], ptr, ptr }> <{ [24 x i8] c"\00\00\00\00\00\00\00\00\10\00\00\00\00\00\00\00\08\00\00\00\00\00\00\00", ptr @"_ZN4core3ops8function6FnOnce40call_once$u7b$$u7b$vtable.shim$u7d$$u7d$17h1f9a9479a24f98d9E", ptr @"_ZN9hashbrown3raw21RawTable$LT$T$C$A$GT$24find_or_find_insert_slot28_$u7b$$u7b$closure$u7d$$u7d$17hca94023023491a67E" }>, align 8
 @vtable.8 = private unnamed_addr constant <{ [24 x i8], ptr, ptr }> <{ [24 x i8] c"\00\00\00\00\00\00\00\00\10\00\00\00\00\00\00\00\08\00\00\00\00\00\00\00", ptr @"_ZN4core3ops8function6FnOnce40call_once$u7b$$u7b$vtable.shim$u7d$$u7d$17hd8b6a5dd67e33949E", ptr @"_ZN9hashbrown3raw21RawTable$LT$T$C$A$GT$4find28_$u7b$$u7b$closure$u7d$$u7d$17hddd8858e9329c06bE" }>, align 8
-@alloc_34d92bea08307d21361f254c290f85c4 = private unnamed_addr constant <{ [13 x i8] }> <{ [13 x i8] c"(answer for '" }>, align 1
+@alloc_db906f0733af9dd344ea31df62347417 = private unnamed_addr constant <{ [20 x i8] }> <{ [20 x i8] c"(openai answer for '" }>, align 1
 @alloc_b65aa9a550da81ee719baf1e75eab7ca = private unnamed_addr constant <{ [2 x i8] }> <{ [2 x i8] c"')" }>, align 1
-@alloc_0b402ef2bb1ebda2f06cd831f9370c6c = private unnamed_addr constant <{ ptr, [8 x i8], ptr, [8 x i8] }> <{ ptr @alloc_34d92bea08307d21361f254c290f85c4, [8 x i8] c"\0D\00\00\00\00\00\00\00", ptr @alloc_b65aa9a550da81ee719baf1e75eab7ca, [8 x i8] c"\02\00\00\00\00\00\00\00" }>, align 8
+@alloc_06b6d6c3cf1d54ac558a5c8cfc1f151c = private unnamed_addr constant <{ ptr, [8 x i8], ptr, [8 x i8] }> <{ ptr @alloc_db906f0733af9dd344ea31df62347417, [8 x i8] c"\14\00\00\00\00\00\00\00", ptr @alloc_b65aa9a550da81ee719baf1e75eab7ca, [8 x i8] c"\02\00\00\00\00\00\00\00" }>, align 8
+@alloc_8a00911d17029ae8a7ebd0905a8419b1 = private unnamed_addr constant <{ [20 x i8] }> <{ [20 x i8] c"(ollama answer for '" }>, align 1
+@alloc_4ae801d55d2c1236d9376211bb769a9a = private unnamed_addr constant <{ ptr, [8 x i8], ptr, [8 x i8] }> <{ ptr @alloc_8a00911d17029ae8a7ebd0905a8419b1, [8 x i8] c"\14\00\00\00\00\00\00\00", ptr @alloc_b65aa9a550da81ee719baf1e75eab7ca, [8 x i8] c"\02\00\00\00\00\00\00\00" }>, align 8
+@alloc_77fdf5d7addea27726e1f6d7c0fe9681 = private unnamed_addr constant <{ [10 x i8] }> <{ [10 x i8] c"token-for-" }>, align 1
+@alloc_bb1edb1dff37759c47c7f4278a7da344 = private unnamed_addr constant <{ ptr, [8 x i8] }> <{ ptr @alloc_77fdf5d7addea27726e1f6d7c0fe9681, [8 x i8] c"\0A\00\00\00\00\00\00\00" }>, align 8
+@alloc_eedb37f55fc0c5b4506ddcc7c0df9d7b = private unnamed_addr constant <{ [4 x i8] }> <{ [4 x i8] c"hash" }>, align 1
+@alloc_905976595ed1b08e57e2b44a2acadea4 = private unnamed_addr constant <{ [4 x i8] }> <{ [4 x i8] c"code" }>, align 1
+@alloc_a182e0c59eadee0a8ce9fa2c30d1052a = private unnamed_addr constant <{ [5 x i8] }> <{ [5 x i8] c"token" }>, align 1
+@alloc_da5c5f922604d9376dbdf48c863f8565 = private unnamed_addr constant <{ [5 x i8] }> <{ [5 x i8] c"query" }>, align 1
 @alloc_16c9339a5932ef97eb9eba216f75d2f8 = private unnamed_addr constant <{ [6 x i8] }> <{ [6 x i8] c"query:" }>, align 1
 @alloc_4caa3d20bda40684a2c59e1708b3cdee = private unnamed_addr constant <{ ptr, [8 x i8] }> <{ ptr @alloc_16c9339a5932ef97eb9eba216f75d2f8, [8 x i8] c"\06\00\00\00\00\00\00\00" }>, align 8
-@alloc_f29629052463ea2cedeaf7060ae0063c = private unnamed_addr constant <{ [20 x i8] }> <{ [20 x i8] c"tests/llm_ac_demo.rs" }>, align 1
-@alloc_407fd3f0cd723a00e65add78dd216179 = private unnamed_addr constant <{ ptr, [16 x i8] }> <{ ptr @alloc_f29629052463ea2cedeaf7060ae0063c, [16 x i8] c"\14\00\00\00\00\00\00\00>\00\00\00)\00\00\00" }>, align 8
+@alloc_4693327ca9c5449cec9b739948ccbb5e = private unnamed_addr constant <{ [7 x i8] }> <{ [7 x i8] c"main.rs" }>, align 1
+@alloc_ba4e0b3734c62db684c8fbced5e599b4 = private unnamed_addr constant <{ ptr, [16 x i8] }> <{ ptr @alloc_4693327ca9c5449cec9b739948ccbb5e, [16 x i8] c"\07\00\00\00\00\00\00\00\AD\00\00\00)\00\00\00" }>, align 8
 @alloc_91d16892003a5ae3285cccf7b8b371ec = private unnamed_addr constant <{ [2 x i8] }> <{ [2 x i8] c" (" }>, align 1
 @alloc_51a64ac0330613c809b89ad96d5e42a1 = private unnamed_addr constant <{ [21 x i8] }> <{ [21 x i8] c") got cached answer: " }>, align 1
 @alloc_49a1e817e911805af64bbc7efb390101 = private unnamed_addr constant <{ [1 x i8] }> <{ [1 x i8] c"\0A" }>, align 1
 @alloc_dd41df3e1bffe297cf2210e56da76f3a = private unnamed_addr constant <{ ptr, [8 x i8], ptr, [8 x i8], ptr, [8 x i8], ptr, [8 x i8] }> <{ ptr inttoptr (i64 1 to ptr), [8 x i8] zeroinitializer, ptr @alloc_91d16892003a5ae3285cccf7b8b371ec, [8 x i8] c"\02\00\00\00\00\00\00\00", ptr @alloc_51a64ac0330613c809b89ad96d5e42a1, [8 x i8] c"\15\00\00\00\00\00\00\00", ptr @alloc_49a1e817e911805af64bbc7efb390101, [8 x i8] c"\01\00\00\00\00\00\00\00" }>, align 8
 @alloc_0b8ceba0698558182ed05c26ef4bd333 = private unnamed_addr constant <{ [17 x i8] }> <{ [17 x i8] c" got new answer: " }>, align 1
 @alloc_7ea3a35effa4486665c106d843af706d = private unnamed_addr constant <{ ptr, [8 x i8], ptr, [8 x i8], ptr, [8 x i8] }> <{ ptr inttoptr (i64 1 to ptr), [8 x i8] zeroinitializer, ptr @alloc_0b8ceba0698558182ed05c26ef4bd333, [8 x i8] c"\11\00\00\00\00\00\00\00", ptr @alloc_49a1e817e911805af64bbc7efb390101, [8 x i8] c"\01\00\00\00\00\00\00\00" }>, align 8
-@alloc_7fa630e815198f22ddd65c9e29f7be77 = private unnamed_addr constant <{ ptr, [16 x i8] }> <{ ptr @alloc_f29629052463ea2cedeaf7060ae0063c, [16 x i8] c"\14\00\00\00\00\00\00\00H\00\00\00-\00\00\00" }>, align 8
+@alloc_8c14b54478955c272a11424839a0cab4 = private unnamed_addr constant <{ ptr, [16 x i8] }> <{ ptr @alloc_4693327ca9c5449cec9b739948ccbb5e, [16 x i8] c"\07\00\00\00\00\00\00\00\B7\00\00\00-\00\00\00" }>, align 8
 @alloc_f651de308bf7ce77323e2d50c7fbeb4a = private unnamed_addr constant <{ [29 x i8] }> <{ [29 x i8] c"What is my first event today?" }>, align 1
 @alloc_37288cabb612f5c472ff0b58f886d477 = private unnamed_addr constant <{ [5 x i8] }> <{ [5 x i8] c"UserA" }>, align 1
 @alloc_470f2c8954eec4cc32bf69cfdca49cc3 = private unnamed_addr constant <{ [5 x i8] }> <{ [5 x i8] c"UserB" }>, align 1
-@alloc_4f9222aa64d25a9a9715ce4240131309 = private unnamed_addr constant <{ ptr, [16 x i8] }> <{ ptr @alloc_f29629052463ea2cedeaf7060ae0063c, [16 x i8] c"\14\00\00\00\00\00\00\00T\00\00\00\14\00\00\00" }>, align 8
-@alloc_337bd9aae6686f78782dff89a9ad5bc3 = private unnamed_addr constant <{ ptr, [16 x i8] }> <{ ptr @alloc_f29629052463ea2cedeaf7060ae0063c, [16 x i8] c"\14\00\00\00\00\00\00\00U\00\00\00\14\00\00\00" }>, align 8
+@alloc_13cb4465fdab2a59859f3dd02e0f1632 = private unnamed_addr constant <{ ptr, [16 x i8] }> <{ ptr @alloc_4693327ca9c5449cec9b739948ccbb5e, [16 x i8] c"\07\00\00\00\00\00\00\00\C3\00\00\00\14\00\00\00" }>, align 8
+@alloc_1df7b0bd14cea408937de4a82812234c = private unnamed_addr constant <{ ptr, [16 x i8] }> <{ ptr @alloc_4693327ca9c5449cec9b739948ccbb5e, [16 x i8] c"\07\00\00\00\00\00\00\00\C4\00\00\00\14\00\00\00" }>, align 8
 
 ; <std::thread::Builder::spawn_unchecked_::MaybeDangling<T> as core::ops::drop::Drop>::drop
 ; Function Attrs: uwtable
@@ -3956,6 +3964,21 @@ start:
   ret i8 %_0
 }
 
+; core::cmp::impls::<impl core::cmp::PartialEq<&B> for &A>::eq
+; Function Attrs: inlinehint uwtable
+define internal zeroext i1 @"_ZN4core3cmp5impls69_$LT$impl$u20$core..cmp..PartialEq$LT$$RF$B$GT$$u20$for$u20$$RF$A$GT$2eq17h7f6b99fe6c8e0774E"(ptr align 8 %self, ptr align 8 %other) unnamed_addr #2 {
+start:
+  %_3.0 = load ptr, ptr %self, align 8
+  %0 = getelementptr inbounds i8, ptr %self, i64 8
+  %_3.1 = load i64, ptr %0, align 8
+  %_4.0 = load ptr, ptr %other, align 8
+  %1 = getelementptr inbounds i8, ptr %other, i64 8
+  %_4.1 = load i64, ptr %1, align 8
+; call core::str::traits::<impl core::cmp::PartialEq for str>::eq
+  %_0 = call zeroext i1 @"_ZN4core3str6traits54_$LT$impl$u20$core..cmp..PartialEq$u20$for$u20$str$GT$2eq17h35f6092847c89430E"(ptr align 1 %_3.0, i64 %_3.1, ptr align 1 %_4.0, i64 %_4.1)
+  ret i1 %_0
+}
+
 ; core::cmp::max_by
 ; Function Attrs: inlinehint uwtable
 define internal i64 @_ZN4core3cmp6max_by17h567daa55be4b7dfaE(i64 %0, i64 %1) unnamed_addr #2 personality ptr @rust_eh_personality {
@@ -7302,6 +7325,37 @@ start:
   ret void
 }
 
+; core::str::<impl str>::is_empty
+; Function Attrs: inlinehint uwtable
+define internal zeroext i1 @"_ZN4core3str21_$LT$impl$u20$str$GT$8is_empty17h28dc8bc0c9a4e063E"(ptr align 1 %self.0, i64 %self.1) unnamed_addr #2 {
+start:
+  %_0 = icmp eq i64 %self.1, 0
+  ret i1 %_0
+}
+
+; core::str::traits::<impl core::cmp::PartialEq for str>::eq
+; Function Attrs: inlinehint uwtable
+define internal zeroext i1 @"_ZN4core3str6traits54_$LT$impl$u20$core..cmp..PartialEq$u20$for$u20$str$GT$2eq17h35f6092847c89430E"(ptr align 1 %self.0, i64 %self.1, ptr align 1 %other.0, i64 %other.1) unnamed_addr #2 {
+start:
+  %other = alloca [16 x i8], align 8
+  %self = alloca [16 x i8], align 8
+  store ptr %self.0, ptr %self, align 8
+  %0 = getelementptr inbounds i8, ptr %self, i64 8
+  store i64 %self.1, ptr %0, align 8
+  store ptr %other.0, ptr %other, align 8
+  %1 = getelementptr inbounds i8, ptr %other, i64 8
+  store i64 %other.1, ptr %1, align 8
+  %2 = load ptr, ptr %self, align 8
+  %3 = getelementptr inbounds i8, ptr %self, i64 8
+  %4 = load i64, ptr %3, align 8
+  %5 = load ptr, ptr %other, align 8
+  %6 = getelementptr inbounds i8, ptr %other, i64 8
+  %7 = load i64, ptr %6, align 8
+; call <[A] as core::slice::cmp::SlicePartialEq<B>>::equal
+  %_0 = call zeroext i1 @"_ZN73_$LT$$u5b$A$u5d$$u20$as$u20$core..slice..cmp..SlicePartialEq$LT$B$GT$$GT$5equal17h1c66434116e22d26E"(ptr align 1 %2, i64 %4, ptr align 1 %5, i64 %7)
+  ret i1 %_0
+}
+
 ; core::char::methods::encode_utf8_raw
 ; Function Attrs: inlinehint uwtable
 define internal { ptr, i64 } @_ZN4core4char7methods15encode_utf8_raw17h24f3e8881097e398E(i32 %code, ptr align 1 %dst.0, i64 %dst.1) unnamed_addr #2 {
@@ -9106,84 +9160,40 @@ bb1:                                              ; No predecessors!
   unreachable
 }
 
-; core::result::Result<T,E>::unwrap_or_default
+; core::result::Result<T,E>::ok
 ; Function Attrs: inlinehint uwtable
-define internal void @"_ZN4core6result19Result$LT$T$C$E$GT$17unwrap_or_default17h8df51315bb0c8d82E"(ptr sret([24 x i8]) align 8 %_0, ptr align 8 %self) unnamed_addr #2 personality ptr @rust_eh_personality {
+define internal void @"_ZN4core6result19Result$LT$T$C$E$GT$2ok17haff13cb6211b8920E"(ptr sret([24 x i8]) align 8 %_0, ptr align 8 %self) unnamed_addr #2 {
 start:
-  %0 = alloca [16 x i8], align 8
   %x = alloca [24 x i8], align 8
-  %1 = load i64, ptr %self, align 8
-  %2 = icmp eq i64 %1, -9223372036854775808
-  %_2 = select i1 %2, i64 1, i64 0
-  %3 = icmp eq i64 %_2, 0
-  br i1 %3, label %bb3, label %bb2
+  %0 = load i64, ptr %self, align 8
+  %1 = icmp eq i64 %0, -9223372036854775808
+  %_2 = select i1 %1, i64 1, i64 0
+  %2 = icmp eq i64 %_2, 0
+  br i1 %2, label %bb3, label %bb2
 
 bb3:                                              ; preds = %start
   call void @llvm.memcpy.p0.p0.i64(ptr align 8 %x, ptr align 8 %self, i64 24, i1 false)
   call void @llvm.memcpy.p0.p0.i64(ptr align 8 %_0, ptr align 8 %x, i64 24, i1 false)
-  br label %bb7
+  br label %bb6
 
 bb2:                                              ; preds = %start
-; invoke <alloc::string::String as core::default::Default>::default
-  invoke void @"_ZN64_$LT$alloc..string..String$u20$as$u20$core..default..Default$GT$7default17h720da14ba7a05b4cE"(ptr sret([24 x i8]) align 8 %_0)
-          to label %bb10 unwind label %cleanup
+  store i64 -9223372036854775808, ptr %_0, align 8
+  br label %bb6
 
-bb7:                                              ; preds = %bb10, %bb3
-  %4 = load i64, ptr %self, align 8
-  %5 = icmp eq i64 %4, -9223372036854775808
-  %_4 = select i1 %5, i64 1, i64 0
-  %6 = icmp eq i64 %_4, 0
-  br i1 %6, label %bb5, label %bb6
+bb6:                                              ; preds = %bb2, %bb3
+  %3 = load i64, ptr %self, align 8
+  %4 = icmp eq i64 %3, -9223372036854775808
+  %_4 = select i1 %4, i64 1, i64 0
+  %5 = icmp eq i64 %_4, 0
+  br i1 %5, label %bb4, label %bb5
 
-bb9:                                              ; preds = %cleanup
-  %7 = load i64, ptr %self, align 8
-  %8 = icmp eq i64 %7, -9223372036854775808
-  %_5 = select i1 %8, i64 1, i64 0
-  %9 = icmp eq i64 %_5, 0
-  br i1 %9, label %bb4, label %bb8
-
-cleanup:                                          ; preds = %bb2
-  %10 = landingpad { ptr, i32 }
-          cleanup
-  %11 = extractvalue { ptr, i32 } %10, 0
-  %12 = extractvalue { ptr, i32 } %10, 1
-  store ptr %11, ptr %0, align 8
-  %13 = getelementptr inbounds i8, ptr %0, i64 8
-  store i32 %12, ptr %13, align 8
-  br label %bb9
-
-bb10:                                             ; preds = %bb2
-  br label %bb7
-
-bb5:                                              ; preds = %bb6, %bb7
+bb4:                                              ; preds = %bb5, %bb6
   ret void
 
-bb6:                                              ; preds = %bb7
+bb5:                                              ; preds = %bb6
 ; call core::ptr::drop_in_place<core::result::Result<alloc::string::String,()>>
   call void @"_ZN4core3ptr81drop_in_place$LT$core..result..Result$LT$alloc..string..String$C$$LP$$RP$$GT$$GT$17h7b0d7d348cddcdf2E"(ptr align 8 %self)
-  br label %bb5
-
-bb4:                                              ; preds = %bb8, %bb9
-  %14 = load ptr, ptr %0, align 8
-  %15 = getelementptr inbounds i8, ptr %0, i64 8
-  %16 = load i32, ptr %15, align 8
-  %17 = insertvalue { ptr, i32 } poison, ptr %14, 0
-  %18 = insertvalue { ptr, i32 } %17, i32 %16, 1
-  resume { ptr, i32 } %18
-
-bb8:                                              ; preds = %bb9
-; invoke core::ptr::drop_in_place<core::result::Result<alloc::string::String,()>>
-  invoke void @"_ZN4core3ptr81drop_in_place$LT$core..result..Result$LT$alloc..string..String$C$$LP$$RP$$GT$$GT$17h7b0d7d348cddcdf2E"(ptr align 8 %self) #27
-          to label %bb4 unwind label %terminate
-
-terminate:                                        ; preds = %bb8
-  %19 = landingpad { ptr, i32 }
-          filter [0 x ptr] zeroinitializer
-  %20 = extractvalue { ptr, i32 } %19, 0
-  %21 = extractvalue { ptr, i32 } %19, 1
-; call core::panicking::panic_in_cleanup
-  call void @_ZN4core9panicking16panic_in_cleanup17hf00910ed745f923dE() #28
-  unreachable
+  br label %bb4
 
 bb1:                                              ; No predecessors!
   unreachable
@@ -10173,6 +10183,16 @@ bb17:                                             ; preds = %bb15
   br label %bb6
 }
 
+; alloc::string::String::len
+; Function Attrs: inlinehint uwtable
+define internal i64 @_ZN5alloc6string6String3len17h5ae59649624ba8b5E(ptr align 8 %self) unnamed_addr #2 {
+start:
+  %0 = getelementptr inbounds i8, ptr %self, i64 16
+  %_0 = load i64, ptr %0, align 8
+  %_2 = icmp ule i64 %_0, 9223372036854775807
+  ret i64 %_0
+}
+
 ; alloc::string::String::as_str
 ; Function Attrs: inlinehint uwtable
 define internal { ptr, i64 } @_ZN5alloc6string6String6as_str17hcca6f488f7002831E(ptr align 8 %self) unnamed_addr #2 {
@@ -10340,20 +10360,6 @@ start:
   %1 = insertvalue { ptr, i64 } poison, ptr %_0.0, 0
   %2 = insertvalue { ptr, i64 } %1, i64 %_0.1, 1
   ret { ptr, i64 } %2
-}
-
-; <alloc::string::String as core::default::Default>::default
-; Function Attrs: inlinehint uwtable
-define internal void @"_ZN64_$LT$alloc..string..String$u20$as$u20$core..default..Default$GT$7default17h720da14ba7a05b4cE"(ptr sret([24 x i8]) align 8 %_0) unnamed_addr #2 {
-start:
-  %_1 = alloca [24 x i8], align 8
-  store i64 0, ptr %_1, align 8
-  %0 = getelementptr inbounds i8, ptr %_1, i64 8
-  store ptr inttoptr (i64 1 to ptr), ptr %0, align 8
-  %1 = getelementptr inbounds i8, ptr %_1, i64 16
-  store i64 0, ptr %1, align 8
-  call void @llvm.memcpy.p0.p0.i64(ptr align 8 %_0, ptr align 8 %_1, i64 24, i1 false)
-  ret void
 }
 
 ; <alloc::string::String as core::ops::deref::Deref>::deref
@@ -15454,7 +15460,31 @@ start:
   %3 = getelementptr inbounds %"core::fmt::rt::Argument<'_>", ptr %_7, i64 0
   call void @llvm.memcpy.p0.p0.i64(ptr align 8 %3, ptr align 8 %_8, i64 16, i1 false)
 ; call core::fmt::Arguments::new_v1
-  call void @_ZN4core3fmt9Arguments6new_v117h27e737ebd457a6faE(ptr sret([48 x i8]) align 8 %_4, ptr align 8 @alloc_0b402ef2bb1ebda2f06cd831f9370c6c, ptr align 8 %_7)
+  call void @_ZN4core3fmt9Arguments6new_v117h27e737ebd457a6faE(ptr sret([48 x i8]) align 8 %_4, ptr align 8 @alloc_06b6d6c3cf1d54ac558a5c8cfc1f151c, ptr align 8 %_7)
+; call alloc::fmt::format
+  call void @_ZN5alloc3fmt6format17h13eaf01536e20539E(ptr sret([24 x i8]) align 8 %res, ptr align 8 %_4)
+  call void @llvm.memcpy.p0.p0.i64(ptr align 8 %_0, ptr align 8 %res, i64 24, i1 false)
+  ret void
+}
+
+; llm_ac_demo::ollama_rs::Ollama::generate
+; Function Attrs: noinline uwtable
+define internal void @_ZN11llm_ac_demo9ollama_rs6Ollama8generate17h596a963234461324E(ptr sret([24 x i8]) align 8 %_0, ptr align 1 %self, ptr align 1 %0, i64 %1) unnamed_addr #4 {
+start:
+  %_8 = alloca [16 x i8], align 8
+  %_7 = alloca [16 x i8], align 8
+  %_4 = alloca [48 x i8], align 8
+  %res = alloca [24 x i8], align 8
+  %request = alloca [16 x i8], align 8
+  store ptr %0, ptr %request, align 8
+  %2 = getelementptr inbounds i8, ptr %request, i64 8
+  store i64 %1, ptr %2, align 8
+; call core::fmt::rt::Argument::new_display
+  call void @_ZN4core3fmt2rt8Argument11new_display17h3f19d8976f348312E(ptr sret([16 x i8]) align 8 %_8, ptr align 8 %request)
+  %3 = getelementptr inbounds %"core::fmt::rt::Argument<'_>", ptr %_7, i64 0
+  call void @llvm.memcpy.p0.p0.i64(ptr align 8 %3, ptr align 8 %_8, i64 16, i1 false)
+; call core::fmt::Arguments::new_v1
+  call void @_ZN4core3fmt9Arguments6new_v117h27e737ebd457a6faE(ptr sret([48 x i8]) align 8 %_4, ptr align 8 @alloc_4ae801d55d2c1236d9376211bb769a9a, ptr align 8 %_7)
 ; call alloc::fmt::format
   call void @_ZN5alloc3fmt6format17h13eaf01536e20539E(ptr sret([24 x i8]) align 8 %res, ptr align 8 %_4)
   call void @llvm.memcpy.p0.p0.i64(ptr align 8 %_0, ptr align 8 %res, i64 24, i1 false)
@@ -15472,14 +15502,385 @@ start:
   ret void
 }
 
+; llm_ac_demo::jsonwebtoken::decode
+; Function Attrs: noinline uwtable
+define internal zeroext i1 @_ZN11llm_ac_demo12jsonwebtoken6decode17h00504b8d8c9fd4eeE(ptr align 1 %token.0, i64 %token.1) unnamed_addr #4 {
+start:
+; call core::str::<impl str>::is_empty
+  %_2 = call zeroext i1 @"_ZN4core3str21_$LT$impl$u20$str$GT$8is_empty17h28dc8bc0c9a4e063E"(ptr align 1 %token.0, i64 %token.1)
+  %_0 = xor i1 %_2, true
+  ret i1 %_0
+}
+
+; llm_ac_demo::casbin::CoreApi::enforce
+; Function Attrs: noinline uwtable
+define internal zeroext i1 @_ZN11llm_ac_demo6casbin7CoreApi7enforce17h2d0e21bdf2a22971E(ptr align 1 %self, ptr align 1 %sub.0, i64 %sub.1, ptr align 1 %act.0, i64 %act.1) unnamed_addr #4 {
+start:
+  %_0 = alloca [1 x i8], align 1
+; call core::str::<impl str>::is_empty
+  %_4 = call zeroext i1 @"_ZN4core3str21_$LT$impl$u20$str$GT$8is_empty17h28dc8bc0c9a4e063E"(ptr align 1 %sub.0, i64 %sub.1)
+  br i1 %_4, label %bb2, label %bb3
+
+bb3:                                              ; preds = %start
+; call core::str::<impl str>::is_empty
+  %_5 = call zeroext i1 @"_ZN4core3str21_$LT$impl$u20$str$GT$8is_empty17h28dc8bc0c9a4e063E"(ptr align 1 %act.0, i64 %act.1)
+  %0 = xor i1 %_5, true
+  %1 = zext i1 %0 to i8
+  store i8 %1, ptr %_0, align 1
+  br label %bb5
+
+bb2:                                              ; preds = %start
+  store i8 0, ptr %_0, align 1
+  br label %bb5
+
+bb5:                                              ; preds = %bb2, %bb3
+  %2 = load i8, ptr %_0, align 1
+  %3 = trunc i8 %2 to i1
+  ret i1 %3
+}
+
+; llm_ac_demo::bcrypt::verify
+; Function Attrs: noinline uwtable
+define internal zeroext i1 @_ZN11llm_ac_demo6bcrypt6verify17h98c1be91a2f9d504E(ptr align 1 %0, i64 %1, ptr align 1 %2, i64 %3) unnamed_addr #4 {
+start:
+  %hash = alloca [16 x i8], align 8
+  %password = alloca [16 x i8], align 8
+  store ptr %0, ptr %password, align 8
+  %4 = getelementptr inbounds i8, ptr %password, i64 8
+  store i64 %1, ptr %4, align 8
+  store ptr %2, ptr %hash, align 8
+  %5 = getelementptr inbounds i8, ptr %hash, i64 8
+  store i64 %3, ptr %5, align 8
+; call core::cmp::impls::<impl core::cmp::PartialEq<&B> for &A>::eq
+  %_0 = call zeroext i1 @"_ZN4core3cmp5impls69_$LT$impl$u20$core..cmp..PartialEq$LT$$RF$B$GT$$u20$for$u20$$RF$A$GT$2eq17h7f6b99fe6c8e0774E"(ptr align 8 %password, ptr align 8 %hash)
+  ret i1 %_0
+}
+
+; <llm_ac_demo::argon2::Argon2 as llm_ac_demo::argon2::PasswordVerifier>::verify_password
+; Function Attrs: noinline uwtable
+define internal zeroext i1 @"_ZN85_$LT$llm_ac_demo..argon2..Argon2$u20$as$u20$llm_ac_demo..argon2..PasswordVerifier$GT$15verify_password17haf798239360ff186E"(ptr align 1 %self, ptr align 1 %0, i64 %1, ptr align 1 %2, i64 %3) unnamed_addr #4 {
+start:
+  %hash = alloca [16 x i8], align 8
+  %password = alloca [16 x i8], align 8
+  store ptr %0, ptr %password, align 8
+  %4 = getelementptr inbounds i8, ptr %password, i64 8
+  store i64 %1, ptr %4, align 8
+  store ptr %2, ptr %hash, align 8
+  %5 = getelementptr inbounds i8, ptr %hash, i64 8
+  store i64 %3, ptr %5, align 8
+; call core::cmp::impls::<impl core::cmp::PartialEq<&B> for &A>::eq
+  %_0 = call zeroext i1 @"_ZN4core3cmp5impls69_$LT$impl$u20$core..cmp..PartialEq$LT$$RF$B$GT$$u20$for$u20$$RF$A$GT$2eq17h7f6b99fe6c8e0774E"(ptr align 8 %password, ptr align 8 %hash)
+  ret i1 %_0
+}
+
+; llm_ac_demo::ldap3::LdapConn::simple_bind
+; Function Attrs: noinline uwtable
+define internal zeroext i1 @_ZN11llm_ac_demo5ldap38LdapConn11simple_bind17h76bf1c8c00241586E(ptr align 1 %self, ptr align 1 %dn.0, i64 %dn.1, ptr align 1 %password.0, i64 %password.1) unnamed_addr #4 {
+start:
+  %_0 = alloca [1 x i8], align 1
+; call core::str::<impl str>::is_empty
+  %_4 = call zeroext i1 @"_ZN4core3str21_$LT$impl$u20$str$GT$8is_empty17h28dc8bc0c9a4e063E"(ptr align 1 %dn.0, i64 %dn.1)
+  br i1 %_4, label %bb2, label %bb3
+
+bb3:                                              ; preds = %start
+; call core::str::<impl str>::is_empty
+  %_5 = call zeroext i1 @"_ZN4core3str21_$LT$impl$u20$str$GT$8is_empty17h28dc8bc0c9a4e063E"(ptr align 1 %password.0, i64 %password.1)
+  %0 = xor i1 %_5, true
+  %1 = zext i1 %0 to i8
+  store i8 %1, ptr %_0, align 1
+  br label %bb5
+
+bb2:                                              ; preds = %start
+  store i8 0, ptr %_0, align 1
+  br label %bb5
+
+bb5:                                              ; preds = %bb2, %bb3
+  %2 = load i8, ptr %_0, align 1
+  %3 = trunc i8 %2 to i1
+  ret i1 %3
+}
+
+; llm_ac_demo::oauth2::Client::exchange_code
+; Function Attrs: noinline uwtable
+define internal void @_ZN11llm_ac_demo6oauth26Client13exchange_code17h23d2e0d3a5cd02d2E(ptr sret([24 x i8]) align 8 %_0, ptr align 1 %self, ptr align 1 %0, i64 %1) unnamed_addr #4 {
+start:
+  %_8 = alloca [16 x i8], align 8
+  %_7 = alloca [16 x i8], align 8
+  %_4 = alloca [48 x i8], align 8
+  %res = alloca [24 x i8], align 8
+  %code = alloca [16 x i8], align 8
+  store ptr %0, ptr %code, align 8
+  %2 = getelementptr inbounds i8, ptr %code, i64 8
+  store i64 %1, ptr %2, align 8
+; call core::fmt::rt::Argument::new_display
+  call void @_ZN4core3fmt2rt8Argument11new_display17h3f19d8976f348312E(ptr sret([16 x i8]) align 8 %_8, ptr align 8 %code)
+  %3 = getelementptr inbounds %"core::fmt::rt::Argument<'_>", ptr %_7, i64 0
+  call void @llvm.memcpy.p0.p0.i64(ptr align 8 %3, ptr align 8 %_8, i64 16, i1 false)
+; call core::fmt::Arguments::new_v1
+  call void @_ZN4core3fmt9Arguments6new_v117h9efff6cf4131040fE(ptr sret([48 x i8]) align 8 %_4, ptr align 8 @alloc_bb1edb1dff37759c47c7f4278a7da344, ptr align 8 %_7)
+; call alloc::fmt::format
+  call void @_ZN5alloc3fmt6format17h13eaf01536e20539E(ptr sret([24 x i8]) align 8 %res, ptr align 8 %_4)
+  call void @llvm.memcpy.p0.p0.i64(ptr align 8 %_0, ptr align 8 %res, i64 24, i1 false)
+  ret void
+}
+
 ; llm_ac_demo::call_llm
 ; Function Attrs: noinline uwtable
-define internal void @_ZN11llm_ac_demo8call_llm17h0d523adffe7a8059E(ptr sret([24 x i8]) align 8 %_0, ptr align 1 %question.0, i64 %question.1) unnamed_addr #4 {
+define internal void @_ZN11llm_ac_demo8call_llm17h0d523adffe7a8059E(ptr sret([24 x i8]) align 8 %_0, ptr align 1 %question.0, i64 %question.1) unnamed_addr #4 personality ptr @rust_eh_personality {
 start:
+  %0 = alloca [16 x i8], align 8
+  %_14 = alloca [1 x i8], align 1
+  %_13 = alloca [1 x i8], align 1
+  %b = alloca [24 x i8], align 8
+  %a = alloca [24 x i8], align 8
+  %_3 = alloca [0 x i8], align 1
   %_2 = alloca [0 x i8], align 1
+  store i8 0, ptr %_14, align 1
+  store i8 0, ptr %_13, align 1
+  store i8 1, ptr %_14, align 1
 ; call llm_ac_demo::async_openai::chat::Chat::create
-  call void @_ZN11llm_ac_demo12async_openai4chat4Chat6create17h51207b4681d134ddE(ptr sret([24 x i8]) align 8 %_0, ptr align 1 %_2, ptr align 1 %question.0, i64 %question.1)
+  call void @_ZN11llm_ac_demo12async_openai4chat4Chat6create17h51207b4681d134ddE(ptr sret([24 x i8]) align 8 %a, ptr align 1 %_2, ptr align 1 %question.0, i64 %question.1)
+; invoke llm_ac_demo::ollama_rs::Ollama::generate
+  invoke void @_ZN11llm_ac_demo9ollama_rs6Ollama8generate17h596a963234461324E(ptr sret([24 x i8]) align 8 %b, ptr align 1 %_3, ptr align 1 %question.0, i64 %question.1)
+          to label %bb2 unwind label %cleanup
+
+bb15:                                             ; preds = %bb10, %cleanup
+  %1 = load i8, ptr %_14, align 1
+  %2 = trunc i8 %1 to i1
+  br i1 %2, label %bb14, label %bb11
+
+cleanup:                                          ; preds = %bb12, %start
+  %3 = landingpad { ptr, i32 }
+          cleanup
+  %4 = extractvalue { ptr, i32 } %3, 0
+  %5 = extractvalue { ptr, i32 } %3, 1
+  store ptr %4, ptr %0, align 8
+  %6 = getelementptr inbounds i8, ptr %0, i64 8
+  store i32 %5, ptr %6, align 8
+  br label %bb15
+
+bb2:                                              ; preds = %start
+  store i8 1, ptr %_13, align 1
+; invoke alloc::string::String::len
+  %_9 = invoke i64 @_ZN5alloc6string6String3len17h5ae59649624ba8b5E(ptr align 8 %a)
+          to label %bb3 unwind label %cleanup1
+
+bb10:                                             ; preds = %cleanup1
+; invoke core::ptr::drop_in_place<alloc::string::String>
+  invoke void @"_ZN4core3ptr42drop_in_place$LT$alloc..string..String$GT$17h6c947ed5f322b78dE"(ptr align 8 %b) #27
+          to label %bb15 unwind label %terminate
+
+cleanup1:                                         ; preds = %bb3, %bb2
+  %7 = landingpad { ptr, i32 }
+          cleanup
+  %8 = extractvalue { ptr, i32 } %7, 0
+  %9 = extractvalue { ptr, i32 } %7, 1
+  store ptr %8, ptr %0, align 8
+  %10 = getelementptr inbounds i8, ptr %0, i64 8
+  store i32 %9, ptr %10, align 8
+  br label %bb10
+
+bb3:                                              ; preds = %bb2
+; invoke alloc::string::String::len
+  %_11 = invoke i64 @_ZN5alloc6string6String3len17h5ae59649624ba8b5E(ptr align 8 %b)
+          to label %bb4 unwind label %cleanup1
+
+bb4:                                              ; preds = %bb3
+  %_8 = icmp uge i64 %_9, %_11
+  br i1 %_8, label %bb5, label %bb6
+
+bb6:                                              ; preds = %bb4
+  store i8 0, ptr %_13, align 1
+  call void @llvm.memcpy.p0.p0.i64(ptr align 8 %_0, ptr align 8 %b, i64 24, i1 false)
+  br label %bb7
+
+bb5:                                              ; preds = %bb4
+  store i8 0, ptr %_14, align 1
+  call void @llvm.memcpy.p0.p0.i64(ptr align 8 %_0, ptr align 8 %a, i64 24, i1 false)
+  br label %bb7
+
+bb7:                                              ; preds = %bb5, %bb6
+  %11 = load i8, ptr %_13, align 1
+  %12 = trunc i8 %11 to i1
+  br i1 %12, label %bb12, label %bb8
+
+bb8:                                              ; preds = %bb12, %bb7
+  store i8 0, ptr %_13, align 1
+  %13 = load i8, ptr %_14, align 1
+  %14 = trunc i8 %13 to i1
+  br i1 %14, label %bb13, label %bb9
+
+bb12:                                             ; preds = %bb7
+; invoke core::ptr::drop_in_place<alloc::string::String>
+  invoke void @"_ZN4core3ptr42drop_in_place$LT$alloc..string..String$GT$17h6c947ed5f322b78dE"(ptr align 8 %b)
+          to label %bb8 unwind label %cleanup
+
+bb9:                                              ; preds = %bb13, %bb8
+  store i8 0, ptr %_14, align 1
   ret void
+
+bb13:                                             ; preds = %bb8
+; call core::ptr::drop_in_place<alloc::string::String>
+  call void @"_ZN4core3ptr42drop_in_place$LT$alloc..string..String$GT$17h6c947ed5f322b78dE"(ptr align 8 %a)
+  br label %bb9
+
+terminate:                                        ; preds = %bb14, %bb10
+  %15 = landingpad { ptr, i32 }
+          filter [0 x ptr] zeroinitializer
+  %16 = extractvalue { ptr, i32 } %15, 0
+  %17 = extractvalue { ptr, i32 } %15, 1
+; call core::panicking::panic_in_cleanup
+  call void @_ZN4core9panicking16panic_in_cleanup17hf00910ed745f923dE() #28
+  unreachable
+
+bb11:                                             ; preds = %bb14, %bb15
+  %18 = load ptr, ptr %0, align 8
+  %19 = getelementptr inbounds i8, ptr %0, i64 8
+  %20 = load i32, ptr %19, align 8
+  %21 = insertvalue { ptr, i32 } poison, ptr %18, 0
+  %22 = insertvalue { ptr, i32 } %21, i32 %20, 1
+  resume { ptr, i32 } %22
+
+bb14:                                             ; preds = %bb15
+; invoke core::ptr::drop_in_place<alloc::string::String>
+  invoke void @"_ZN4core3ptr42drop_in_place$LT$alloc..string..String$GT$17h6c947ed5f322b78dE"(ptr align 8 %a) #27
+          to label %bb11 unwind label %terminate
+}
+
+; llm_ac_demo::authenticate
+; Function Attrs: noinline uwtable
+define internal void @_ZN11llm_ac_demo12authenticate17h81009e0cc42d5dcfE(ptr sret([24 x i8]) align 8 %_0, ptr align 1 %user.0, i64 %user.1, ptr align 1 %token.0, i64 %token.1, ptr align 1 %password.0, i64 %password.1) unnamed_addr #4 personality ptr @rust_eh_personality {
+start:
+  %0 = alloca [16 x i8], align 8
+  %_20 = alloca [24 x i8], align 8
+  %_19 = alloca [24 x i8], align 8
+  %identity = alloca [24 x i8], align 8
+  %_token = alloca [24 x i8], align 8
+  %_14 = alloca [0 x i8], align 1
+  %_11 = alloca [0 x i8], align 1
+  %_7 = alloca [0 x i8], align 1
+; call llm_ac_demo::jsonwebtoken::decode
+  %_4 = call zeroext i1 @_ZN11llm_ac_demo12jsonwebtoken6decode17h00504b8d8c9fd4eeE(ptr align 1 %token.0, i64 %token.1)
+  br i1 %_4, label %bb2, label %bb3
+
+bb3:                                              ; preds = %start
+  store i64 -9223372036854775808, ptr %_0, align 8
+  br label %bb18
+
+bb2:                                              ; preds = %start
+; call llm_ac_demo::bcrypt::verify
+  %_5 = call zeroext i1 @_ZN11llm_ac_demo6bcrypt6verify17h98c1be91a2f9d504E(ptr align 1 %password.0, i64 %password.1, ptr align 1 @alloc_eedb37f55fc0c5b4506ddcc7c0df9d7b, i64 4)
+  br i1 %_5, label %bb5, label %bb6
+
+bb18:                                             ; preds = %bb17, %bb12, %bb9, %bb6, %bb3
+  ret void
+
+bb6:                                              ; preds = %bb2
+  store i64 -9223372036854775808, ptr %_0, align 8
+  br label %bb18
+
+bb5:                                              ; preds = %bb2
+; call <llm_ac_demo::argon2::Argon2 as llm_ac_demo::argon2::PasswordVerifier>::verify_password
+  %_8 = call zeroext i1 @"_ZN85_$LT$llm_ac_demo..argon2..Argon2$u20$as$u20$llm_ac_demo..argon2..PasswordVerifier$GT$15verify_password17haf798239360ff186E"(ptr align 1 %_7, ptr align 1 %password.0, i64 %password.1, ptr align 1 @alloc_eedb37f55fc0c5b4506ddcc7c0df9d7b, i64 4)
+  br i1 %_8, label %bb8, label %bb9
+
+bb9:                                              ; preds = %bb5
+  store i64 -9223372036854775808, ptr %_0, align 8
+  br label %bb18
+
+bb8:                                              ; preds = %bb5
+; call llm_ac_demo::ldap3::LdapConn::simple_bind
+  %_12 = call zeroext i1 @_ZN11llm_ac_demo5ldap38LdapConn11simple_bind17h76bf1c8c00241586E(ptr align 1 %_11, ptr align 1 %user.0, i64 %user.1, ptr align 1 %password.0, i64 %password.1)
+  br i1 %_12, label %bb11, label %bb12
+
+bb12:                                             ; preds = %bb8
+  store i64 -9223372036854775808, ptr %_0, align 8
+  br label %bb18
+
+bb11:                                             ; preds = %bb8
+; call llm_ac_demo::oauth2::Client::exchange_code
+  call void @_ZN11llm_ac_demo6oauth26Client13exchange_code17h23d2e0d3a5cd02d2E(ptr sret([24 x i8]) align 8 %_token, ptr align 1 %_14, ptr align 1 @alloc_905976595ed1b08e57e2b44a2acadea4, i64 4)
+; invoke <T as alloc::string::ToString>::to_string
+  invoke void @"_ZN45_$LT$T$u20$as$u20$alloc..string..ToString$GT$9to_string17h1ced9a3c5ab5a58eE"(ptr sret([24 x i8]) align 8 %_19, ptr align 1 %user.0, i64 %user.1)
+          to label %bb14 unwind label %cleanup
+
+bb20:                                             ; preds = %bb19, %cleanup
+; invoke core::ptr::drop_in_place<alloc::string::String>
+  invoke void @"_ZN4core3ptr42drop_in_place$LT$alloc..string..String$GT$17h6c947ed5f322b78dE"(ptr align 8 %_token) #27
+          to label %bb21 unwind label %terminate
+
+cleanup:                                          ; preds = %bb16, %bb11
+  %1 = landingpad { ptr, i32 }
+          cleanup
+  %2 = extractvalue { ptr, i32 } %1, 0
+  %3 = extractvalue { ptr, i32 } %1, 1
+  store ptr %2, ptr %0, align 8
+  %4 = getelementptr inbounds i8, ptr %0, i64 8
+  store i32 %3, ptr %4, align 8
+  br label %bb20
+
+bb14:                                             ; preds = %bb11
+  call void @llvm.memcpy.p0.p0.i64(ptr align 8 %identity, ptr align 8 %_19, i64 24, i1 false)
+; invoke llm_ac_demo::actix_identity::Identity::id
+  invoke void @_ZN11llm_ac_demo14actix_identity8Identity2id17h22473be3b156598eE(ptr sret([24 x i8]) align 8 %_20, ptr align 8 %identity)
+          to label %bb15 unwind label %cleanup1
+
+bb19:                                             ; preds = %cleanup1
+; invoke core::ptr::drop_in_place<llm_ac_demo::actix_identity::Identity>
+  invoke void @"_ZN4core3ptr58drop_in_place$LT$llm_ac_demo..actix_identity..Identity$GT$17h77296d3ce12e8f23E"(ptr align 8 %identity) #27
+          to label %bb20 unwind label %terminate
+
+cleanup1:                                         ; preds = %bb15, %bb14
+  %5 = landingpad { ptr, i32 }
+          cleanup
+  %6 = extractvalue { ptr, i32 } %5, 0
+  %7 = extractvalue { ptr, i32 } %5, 1
+  store ptr %6, ptr %0, align 8
+  %8 = getelementptr inbounds i8, ptr %0, i64 8
+  store i32 %7, ptr %8, align 8
+  br label %bb19
+
+bb15:                                             ; preds = %bb14
+; invoke core::result::Result<T,E>::ok
+  invoke void @"_ZN4core6result19Result$LT$T$C$E$GT$2ok17haff13cb6211b8920E"(ptr sret([24 x i8]) align 8 %_0, ptr align 8 %_20)
+          to label %bb16 unwind label %cleanup1
+
+bb16:                                             ; preds = %bb15
+; invoke core::ptr::drop_in_place<llm_ac_demo::actix_identity::Identity>
+  invoke void @"_ZN4core3ptr58drop_in_place$LT$llm_ac_demo..actix_identity..Identity$GT$17h77296d3ce12e8f23E"(ptr align 8 %identity)
+          to label %bb17 unwind label %cleanup
+
+bb17:                                             ; preds = %bb16
+; call core::ptr::drop_in_place<alloc::string::String>
+  call void @"_ZN4core3ptr42drop_in_place$LT$alloc..string..String$GT$17h6c947ed5f322b78dE"(ptr align 8 %_token)
+  br label %bb18
+
+terminate:                                        ; preds = %bb20, %bb19
+  %9 = landingpad { ptr, i32 }
+          filter [0 x ptr] zeroinitializer
+  %10 = extractvalue { ptr, i32 } %9, 0
+  %11 = extractvalue { ptr, i32 } %9, 1
+; call core::panicking::panic_in_cleanup
+  call void @_ZN4core9panicking16panic_in_cleanup17hf00910ed745f923dE() #28
+  unreachable
+
+bb21:                                             ; preds = %bb20
+  %12 = load ptr, ptr %0, align 8
+  %13 = getelementptr inbounds i8, ptr %0, i64 8
+  %14 = load i32, ptr %13, align 8
+  %15 = insertvalue { ptr, i32 } poison, ptr %12, 0
+  %16 = insertvalue { ptr, i32 } %15, i32 %14, 1
+  resume { ptr, i32 } %16
+}
+
+; llm_ac_demo::authorize
+; Function Attrs: noinline uwtable
+define internal zeroext i1 @_ZN11llm_ac_demo9authorize17hba209a43d7c89e43E(ptr align 1 %uid.0, i64 %uid.1, ptr align 1 %action.0, i64 %action.1) unnamed_addr #4 {
+start:
+  %_3 = alloca [0 x i8], align 1
+; call llm_ac_demo::casbin::CoreApi::enforce
+  %_0 = call zeroext i1 @_ZN11llm_ac_demo6casbin7CoreApi7enforce17h2d0e21bdf2a22971E(ptr align 1 %_3, ptr align 1 %uid.0, i64 %uid.1, ptr align 1 %action.0, i64 %action.1)
+  ret i1 %_0
 }
 
 ; llm_ac_demo::spawn_user_query
@@ -15591,180 +15992,197 @@ start:
   %1 = alloca [16 x i8], align 8
   %e.i = alloca [16 x i8], align 8
   %2 = alloca [16 x i8], align 8
-  %_61 = alloca [1 x i8], align 1
-  %_60 = alloca [1 x i8], align 1
-  %_59 = alloca [1 x i8], align 1
-  %_58 = alloca [24 x i8], align 8
+  %_67 = alloca [1 x i8], align 1
+  %_66 = alloca [1 x i8], align 1
+  %_65 = alloca [1 x i8], align 1
+  %_64 = alloca [24 x i8], align 8
+  %_63 = alloca [24 x i8], align 8
+  %_60 = alloca [24 x i8], align 8
   %_57 = alloca [24 x i8], align 8
-  %_54 = alloca [24 x i8], align 8
-  %_51 = alloca [24 x i8], align 8
-  %map2 = alloca [16 x i8], align 8
-  %_48 = alloca [16 x i8], align 8
-  %_46 = alloca [16 x i8], align 8
-  %_45 = alloca [32 x i8], align 8
-  %_42 = alloca [48 x i8], align 8
-  %answer1 = alloca [24 x i8], align 8
-  %_36 = alloca [16 x i8], align 8
-  %_34 = alloca [16 x i8], align 8
-  %_32 = alloca [16 x i8], align 8
-  %_31 = alloca [48 x i8], align 8
-  %_28 = alloca [48 x i8], align 8
+  %map3 = alloca [16 x i8], align 8
+  %_54 = alloca [16 x i8], align 8
+  %_52 = alloca [16 x i8], align 8
+  %_51 = alloca [32 x i8], align 8
+  %_48 = alloca [48 x i8], align 8
+  %answer2 = alloca [24 x i8], align 8
+  %_42 = alloca [16 x i8], align 8
+  %_40 = alloca [16 x i8], align 8
+  %_38 = alloca [16 x i8], align 8
+  %_37 = alloca [48 x i8], align 8
+  %_34 = alloca [48 x i8], align 8
   %answer = alloca [24 x i8], align 8
-  %_18 = alloca [24 x i8], align 8
+  %_24 = alloca [24 x i8], align 8
   %map = alloca [16 x i8], align 8
   %cached_answer = alloca [24 x i8], align 8
-  %_14 = alloca [16 x i8], align 8
-  %_13 = alloca [16 x i8], align 8
-  %_10 = alloca [48 x i8], align 8
+  %_20 = alloca [16 x i8], align 8
+  %_19 = alloca [16 x i8], align 8
+  %_16 = alloca [48 x i8], align 8
   %res = alloca [24 x i8], align 8
   %key = alloca [24 x i8], align 8
-  %_6 = alloca [24 x i8], align 8
-  %uid = alloca [24 x i8], align 8
+  %uid1 = alloca [24 x i8], align 8
   %_3 = alloca [24 x i8], align 8
-  %identity = alloca [24 x i8], align 8
-  store i8 0, ptr %_60, align 1
-  store i8 0, ptr %_61, align 1
-  store i8 0, ptr %_59, align 1
-; invoke <alloc::string::String as core::clone::Clone>::clone
-  invoke void @"_ZN60_$LT$alloc..string..String$u20$as$u20$core..clone..Clone$GT$5clone17hce216454b6bc77b5E"(ptr sret([24 x i8]) align 8 %_3, ptr align 8 %_1)
+  %uid = alloca [24 x i8], align 8
+  store i8 0, ptr %_66, align 1
+  store i8 0, ptr %_67, align 1
+  store i8 0, ptr %_65, align 1
+; invoke <alloc::string::String as core::ops::deref::Deref>::deref
+  %3 = invoke { ptr, i64 } @"_ZN65_$LT$alloc..string..String$u20$as$u20$core..ops..deref..Deref$GT$5deref17hc8ac4f23cdfd1ccdE"(ptr align 8 %_1)
           to label %bb1 unwind label %cleanup
 
-bb44:                                             ; preds = %bb43, %cleanup
+bb48:                                             ; preds = %bb47, %cleanup
 ; invoke core::ptr::drop_in_place<llm_ac_demo::spawn_user_query::{{closure}}>
   invoke void @"_ZN4core3ptr79drop_in_place$LT$llm_ac_demo..spawn_user_query..$u7b$$u7b$closure$u7d$$u7d$$GT$17hf5619558a6c75e9dE"(ptr align 8 %_1) #27
-          to label %bb45 unwind label %terminate
+          to label %bb49 unwind label %terminate
 
-cleanup:                                          ; preds = %bb36, %start
-  %3 = landingpad { ptr, i32 }
+cleanup:                                          ; preds = %bb40, %bb8, %bb1, %start
+  %4 = landingpad { ptr, i32 }
           cleanup
-  %4 = extractvalue { ptr, i32 } %3, 0
-  %5 = extractvalue { ptr, i32 } %3, 1
-  store ptr %4, ptr %2, align 8
-  %6 = getelementptr inbounds i8, ptr %2, i64 8
-  store i32 %5, ptr %6, align 8
-  br label %bb44
+  %5 = extractvalue { ptr, i32 } %4, 0
+  %6 = extractvalue { ptr, i32 } %4, 1
+  store ptr %5, ptr %2, align 8
+  %7 = getelementptr inbounds i8, ptr %2, i64 8
+  store i32 %6, ptr %7, align 8
+  br label %bb48
 
 bb1:                                              ; preds = %start
-  call void @llvm.memcpy.p0.p0.i64(ptr align 8 %identity, ptr align 8 %_3, i64 24, i1 false)
-; invoke llm_ac_demo::actix_identity::Identity::id
-  invoke void @_ZN11llm_ac_demo14actix_identity8Identity2id17h22473be3b156598eE(ptr sret([24 x i8]) align 8 %_6, ptr align 8 %identity)
-          to label %bb2 unwind label %cleanup3
-
-bb43:                                             ; preds = %bb42, %cleanup3
-; invoke core::ptr::drop_in_place<llm_ac_demo::actix_identity::Identity>
-  invoke void @"_ZN4core3ptr58drop_in_place$LT$llm_ac_demo..actix_identity..Identity$GT$17h77296d3ce12e8f23E"(ptr align 8 %identity) #27
-          to label %bb44 unwind label %terminate
-
-cleanup3:                                         ; preds = %bb35, %bb2, %bb1
-  %7 = landingpad { ptr, i32 }
-          cleanup
-  %8 = extractvalue { ptr, i32 } %7, 0
-  %9 = extractvalue { ptr, i32 } %7, 1
-  store ptr %8, ptr %2, align 8
-  %10 = getelementptr inbounds i8, ptr %2, i64 8
-  store i32 %9, ptr %10, align 8
-  br label %bb43
+  %_4.0 = extractvalue { ptr, i64 } %3, 0
+  %_4.1 = extractvalue { ptr, i64 } %3, 1
+; invoke llm_ac_demo::authenticate
+  invoke void @_ZN11llm_ac_demo12authenticate17h81009e0cc42d5dcfE(ptr sret([24 x i8]) align 8 %_3, ptr align 1 %_4.0, i64 %_4.1, ptr align 1 @alloc_a182e0c59eadee0a8ce9fa2c30d1052a, i64 5, ptr align 1 @alloc_eedb37f55fc0c5b4506ddcc7c0df9d7b, i64 4)
+          to label %bb2 unwind label %cleanup
 
 bb2:                                              ; preds = %bb1
-; invoke core::result::Result<T,E>::unwrap_or_default
-  invoke void @"_ZN4core6result19Result$LT$T$C$E$GT$17unwrap_or_default17h8df51315bb0c8d82E"(ptr sret([24 x i8]) align 8 %uid, ptr align 8 %_6)
-          to label %bb3 unwind label %cleanup3
+  %8 = load i64, ptr %_3, align 8
+  %9 = icmp eq i64 %8, -9223372036854775808
+  %_8 = select i1 %9, i64 0, i64 1
+  %10 = icmp eq i64 %_8, 0
+  br i1 %10, label %bb42, label %bb4
 
-bb3:                                              ; preds = %bb2
-  %_15 = getelementptr inbounds i8, ptr %_1, i64 24
-; invoke core::fmt::rt::Argument::new_display
-  invoke void @_ZN4core3fmt2rt8Argument11new_display17hc841db86ea8dc84aE(ptr sret([16 x i8]) align 8 %_14, ptr align 8 %_15)
-          to label %bb4 unwind label %cleanup4
+bb42:                                             ; preds = %bb8, %bb2
+; call core::ptr::drop_in_place<llm_ac_demo::spawn_user_query::{{closure}}>
+  call void @"_ZN4core3ptr79drop_in_place$LT$llm_ac_demo..spawn_user_query..$u7b$$u7b$closure$u7d$$u7d$$GT$17hf5619558a6c75e9dE"(ptr align 8 %_1)
+  br label %bb43
 
-bb42:                                             ; preds = %bb56, %bb57, %cleanup4
-; invoke core::ptr::drop_in_place<alloc::string::String>
-  invoke void @"_ZN4core3ptr42drop_in_place$LT$alloc..string..String$GT$17h6c947ed5f322b78dE"(ptr align 8 %uid) #27
-          to label %bb43 unwind label %terminate
-
-cleanup4:                                         ; preds = %bb50, %bb5, %bb4, %bb3
-  %11 = landingpad { ptr, i32 }
-          cleanup
-  %12 = extractvalue { ptr, i32 } %11, 0
-  %13 = extractvalue { ptr, i32 } %11, 1
-  store ptr %12, ptr %2, align 8
-  %14 = getelementptr inbounds i8, ptr %2, i64 8
-  store i32 %13, ptr %14, align 8
-  br label %bb42
-
-bb4:                                              ; preds = %bb3
-  %15 = getelementptr inbounds %"core::fmt::rt::Argument<'_>", ptr %_13, i64 0
-  call void @llvm.memcpy.p0.p0.i64(ptr align 8 %15, ptr align 8 %_14, i64 16, i1 false)
-; invoke core::fmt::Arguments::new_v1
-  invoke void @_ZN4core3fmt9Arguments6new_v117h9efff6cf4131040fE(ptr sret([48 x i8]) align 8 %_10, ptr align 8 @alloc_4caa3d20bda40684a2c59e1708b3cdee, ptr align 8 %_13)
+bb4:                                              ; preds = %bb2
+  call void @llvm.memcpy.p0.p0.i64(ptr align 8 %uid1, ptr align 8 %_3, i64 24, i1 false)
+  call void @llvm.memcpy.p0.p0.i64(ptr align 8 %uid, ptr align 8 %uid1, i64 24, i1 false)
+; invoke <alloc::string::String as core::ops::deref::Deref>::deref
+  %11 = invoke { ptr, i64 } @"_ZN65_$LT$alloc..string..String$u20$as$u20$core..ops..deref..Deref$GT$5deref17hc8ac4f23cdfd1ccdE"(ptr align 8 %uid)
           to label %bb5 unwind label %cleanup4
 
+bb47:                                             ; preds = %bb60, %bb61, %cleanup4
+; invoke core::ptr::drop_in_place<alloc::string::String>
+  invoke void @"_ZN4core3ptr42drop_in_place$LT$alloc..string..String$GT$17h6c947ed5f322b78dE"(ptr align 8 %uid) #27
+          to label %bb48 unwind label %terminate
+
+cleanup4:                                         ; preds = %bb54, %bb10, %bb9, %bb7, %bb5, %bb4
+  %12 = landingpad { ptr, i32 }
+          cleanup
+  %13 = extractvalue { ptr, i32 } %12, 0
+  %14 = extractvalue { ptr, i32 } %12, 1
+  store ptr %13, ptr %2, align 8
+  %15 = getelementptr inbounds i8, ptr %2, i64 8
+  store i32 %14, ptr %15, align 8
+  br label %bb47
+
 bb5:                                              ; preds = %bb4
-; invoke alloc::fmt::format
-  invoke void @_ZN5alloc3fmt6format17h13eaf01536e20539E(ptr sret([24 x i8]) align 8 %res, ptr align 8 %_10)
+  %_11.0 = extractvalue { ptr, i64 } %11, 0
+  %_11.1 = extractvalue { ptr, i64 } %11, 1
+; invoke llm_ac_demo::authorize
+  %_10 = invoke zeroext i1 @_ZN11llm_ac_demo9authorize17hba209a43d7c89e43E(ptr align 1 %_11.0, i64 %_11.1, ptr align 1 @alloc_da5c5f922604d9376dbdf48c863f8565, i64 5)
           to label %bb6 unwind label %cleanup4
 
 bb6:                                              ; preds = %bb5
-  call void @llvm.memcpy.p0.p0.i64(ptr align 8 %key, ptr align 8 %res, i64 24, i1 false)
-  br label %bb7
+  br i1 %_10, label %bb7, label %bb8
+
+bb8:                                              ; preds = %bb6
+; invoke core::ptr::drop_in_place<alloc::string::String>
+  invoke void @"_ZN4core3ptr42drop_in_place$LT$alloc..string..String$GT$17h6c947ed5f322b78dE"(ptr align 8 %uid)
+          to label %bb42 unwind label %cleanup
 
 bb7:                                              ; preds = %bb6
-  store i8 1, ptr %_60, align 1
-  %_20 = getelementptr inbounds i8, ptr %_1, i64 48
+  %_21 = getelementptr inbounds i8, ptr %_1, i64 24
+; invoke core::fmt::rt::Argument::new_display
+  invoke void @_ZN4core3fmt2rt8Argument11new_display17hc841db86ea8dc84aE(ptr sret([16 x i8]) align 8 %_20, ptr align 8 %_21)
+          to label %bb9 unwind label %cleanup4
+
+bb43:                                             ; preds = %bb41, %bb42
+  ret void
+
+bb9:                                              ; preds = %bb7
+  %16 = getelementptr inbounds %"core::fmt::rt::Argument<'_>", ptr %_19, i64 0
+  call void @llvm.memcpy.p0.p0.i64(ptr align 8 %16, ptr align 8 %_20, i64 16, i1 false)
+; invoke core::fmt::Arguments::new_v1
+  invoke void @_ZN4core3fmt9Arguments6new_v117h9efff6cf4131040fE(ptr sret([48 x i8]) align 8 %_16, ptr align 8 @alloc_4caa3d20bda40684a2c59e1708b3cdee, ptr align 8 %_19)
+          to label %bb10 unwind label %cleanup4
+
+bb10:                                             ; preds = %bb9
+; invoke alloc::fmt::format
+  invoke void @_ZN5alloc3fmt6format17h13eaf01536e20539E(ptr sret([24 x i8]) align 8 %res, ptr align 8 %_16)
+          to label %bb11 unwind label %cleanup4
+
+bb11:                                             ; preds = %bb10
+  call void @llvm.memcpy.p0.p0.i64(ptr align 8 %key, ptr align 8 %res, i64 24, i1 false)
+  br label %bb12
+
+bb12:                                             ; preds = %bb11
+  store i8 1, ptr %_66, align 1
+  %_26 = getelementptr inbounds i8, ptr %_1, i64 48
 ; invoke <alloc::sync::Arc<T,A> as core::ops::deref::Deref>::deref
-  %_19 = invoke align 8 ptr @"_ZN73_$LT$alloc..sync..Arc$LT$T$C$A$GT$$u20$as$u20$core..ops..deref..Deref$GT$5deref17h2ccda629503dab60E"(ptr align 8 %_20)
-          to label %bb8 unwind label %cleanup5
+  %_25 = invoke align 8 ptr @"_ZN73_$LT$alloc..sync..Arc$LT$T$C$A$GT$$u20$as$u20$core..ops..deref..Deref$GT$5deref17h2ccda629503dab60E"(ptr align 8 %_26)
+          to label %bb13 unwind label %cleanup5
 
-bb57:                                             ; preds = %bb41, %bb54, %bb53, %bb55, %cleanup5.body
-  %16 = load i8, ptr %_60, align 1
-  %17 = trunc i8 %16 to i1
-  br i1 %17, label %bb56, label %bb42
+bb61:                                             ; preds = %bb46, %bb58, %bb57, %bb59, %cleanup5.body
+  %17 = load i8, ptr %_66, align 1
+  %18 = trunc i8 %17 to i1
+  br i1 %18, label %bb60, label %bb47
 
-cleanup5:                                         ; preds = %bb48, %bb13, %bb8, %bb7
-  %18 = landingpad { ptr, i32 }
+cleanup5:                                         ; preds = %bb52, %bb18, %bb13, %bb12
+  %19 = landingpad { ptr, i32 }
           cleanup
   br label %cleanup5.body
 
 cleanup5.body:                                    ; preds = %bb5.i16, %cleanup5
-  %eh.lpad-body20 = phi { ptr, i32 } [ %18, %cleanup5 ], [ %41, %bb5.i16 ]
-  %19 = extractvalue { ptr, i32 } %eh.lpad-body20, 0
-  %20 = extractvalue { ptr, i32 } %eh.lpad-body20, 1
-  store ptr %19, ptr %2, align 8
-  %21 = getelementptr inbounds i8, ptr %2, i64 8
-  store i32 %20, ptr %21, align 8
-  br label %bb57
+  %eh.lpad-body20 = phi { ptr, i32 } [ %19, %cleanup5 ], [ %42, %bb5.i16 ]
+  %20 = extractvalue { ptr, i32 } %eh.lpad-body20, 0
+  %21 = extractvalue { ptr, i32 } %eh.lpad-body20, 1
+  store ptr %20, ptr %2, align 8
+  %22 = getelementptr inbounds i8, ptr %2, i64 8
+  store i32 %21, ptr %22, align 8
+  br label %bb61
 
-bb8:                                              ; preds = %bb7
+bb13:                                             ; preds = %bb12
 ; invoke std::sync::poison::mutex::Mutex<T>::lock
-  invoke void @"_ZN3std4sync6poison5mutex14Mutex$LT$T$GT$4lock17hcf505743eb7939e4E"(ptr sret([24 x i8]) align 8 %_18, ptr align 8 %_19)
-          to label %bb9 unwind label %cleanup5
+  invoke void @"_ZN3std4sync6poison5mutex14Mutex$LT$T$GT$4lock17hcf505743eb7939e4E"(ptr sret([24 x i8]) align 8 %_24, ptr align 8 %_25)
+          to label %bb14 unwind label %cleanup5
 
-bb9:                                              ; preds = %bb8
-  %_2.i12 = load i64, ptr %_18, align 8
-  %22 = icmp eq i64 %_2.i12, 0
-  br i1 %22, label %"_ZN4core6result19Result$LT$T$C$E$GT$6unwrap17he85693edfc086aa4E.exit21", label %bb2.i13
+bb14:                                             ; preds = %bb13
+  %_2.i12 = load i64, ptr %_24, align 8
+  %23 = icmp eq i64 %_2.i12, 0
+  br i1 %23, label %"_ZN4core6result19Result$LT$T$C$E$GT$6unwrap17he85693edfc086aa4E.exit21", label %bb2.i13
 
-bb2.i13:                                          ; preds = %bb9
-  %23 = getelementptr inbounds i8, ptr %_18, i64 8
-  %24 = load ptr, ptr %23, align 8
-  %25 = getelementptr inbounds i8, ptr %23, i64 8
-  %26 = load i8, ptr %25, align 8
-  %27 = trunc i8 %26 to i1
-  store ptr %24, ptr %e.i11, align 8
-  %28 = getelementptr inbounds i8, ptr %e.i11, i64 8
-  %29 = zext i1 %27 to i8
-  store i8 %29, ptr %28, align 8
+bb2.i13:                                          ; preds = %bb14
+  %24 = getelementptr inbounds i8, ptr %_24, i64 8
+  %25 = load ptr, ptr %24, align 8
+  %26 = getelementptr inbounds i8, ptr %24, i64 8
+  %27 = load i8, ptr %26, align 8
+  %28 = trunc i8 %27 to i1
+  store ptr %25, ptr %e.i11, align 8
+  %29 = getelementptr inbounds i8, ptr %e.i11, i64 8
+  %30 = zext i1 %28 to i8
+  store i8 %30, ptr %29, align 8
 ; invoke core::result::unwrap_failed
-  invoke void @_ZN4core6result13unwrap_failed17h046bdb3bae4a9eafE(ptr align 1 @alloc_00ae4b301f7fab8ac9617c03fcbd7274, i64 43, ptr align 1 %e.i11, ptr align 8 @vtable.5, ptr align 8 @alloc_407fd3f0cd723a00e65add78dd216179) #25
+  invoke void @_ZN4core6result13unwrap_failed17h046bdb3bae4a9eafE(ptr align 1 @alloc_00ae4b301f7fab8ac9617c03fcbd7274, i64 43, ptr align 1 %e.i11, ptr align 8 @vtable.5, ptr align 8 @alloc_ba4e0b3734c62db684c8fbced5e599b4) #25
           to label %unreachable.i17 unwind label %cleanup.i14
 
 cleanup.i14:                                      ; preds = %bb2.i13
-  %30 = landingpad { ptr, i32 }
+  %31 = landingpad { ptr, i32 }
           cleanup
-  %31 = extractvalue { ptr, i32 } %30, 0
-  %32 = extractvalue { ptr, i32 } %30, 1
-  store ptr %31, ptr %0, align 8
-  %33 = getelementptr inbounds i8, ptr %0, i64 8
-  store i32 %32, ptr %33, align 8
+  %32 = extractvalue { ptr, i32 } %31, 0
+  %33 = extractvalue { ptr, i32 } %31, 1
+  store ptr %32, ptr %0, align 8
+  %34 = getelementptr inbounds i8, ptr %0, i64 8
+  store i32 %33, ptr %34, align 8
 ; invoke core::ptr::drop_in_place<std::sync::poison::PoisonError<std::sync::poison::mutex::MutexGuard<std::collections::hash::map::HashMap<alloc::string::String,alloc::string::String>>>>
   invoke void @"_ZN4core3ptr192drop_in_place$LT$std..sync..poison..PoisonError$LT$std..sync..poison..mutex..MutexGuard$LT$std..collections..hash..map..HashMap$LT$alloc..string..String$C$alloc..string..String$GT$$GT$$GT$$GT$17h2b199cf85e6f7835E"(ptr align 8 %e.i11) #27
           to label %bb5.i16 unwind label %terminate.i15
@@ -15773,263 +16191,263 @@ unreachable.i17:                                  ; preds = %bb2.i13
   unreachable
 
 terminate.i15:                                    ; preds = %cleanup.i14
-  %34 = landingpad { ptr, i32 }
+  %35 = landingpad { ptr, i32 }
           cleanup
           filter [0 x ptr] zeroinitializer
-  %35 = extractvalue { ptr, i32 } %34, 0
-  %36 = extractvalue { ptr, i32 } %34, 1
+  %36 = extractvalue { ptr, i32 } %35, 0
+  %37 = extractvalue { ptr, i32 } %35, 1
 ; call core::panicking::panic_in_cleanup
   call void @_ZN4core9panicking16panic_in_cleanup17hf00910ed745f923dE() #28
   unreachable
 
 bb5.i16:                                          ; preds = %cleanup.i14
-  %37 = load ptr, ptr %0, align 8
-  %38 = getelementptr inbounds i8, ptr %0, i64 8
-  %39 = load i32, ptr %38, align 8
-  %40 = insertvalue { ptr, i32 } poison, ptr %37, 0
-  %41 = insertvalue { ptr, i32 } %40, i32 %39, 1
+  %38 = load ptr, ptr %0, align 8
+  %39 = getelementptr inbounds i8, ptr %0, i64 8
+  %40 = load i32, ptr %39, align 8
+  %41 = insertvalue { ptr, i32 } poison, ptr %38, 0
+  %42 = insertvalue { ptr, i32 } %41, i32 %40, 1
   br label %cleanup5.body
 
-"_ZN4core6result19Result$LT$T$C$E$GT$6unwrap17he85693edfc086aa4E.exit21": ; preds = %bb9
-  %42 = getelementptr inbounds i8, ptr %_18, i64 8
-  %t.0.i18 = load ptr, ptr %42, align 8
-  %43 = getelementptr inbounds i8, ptr %42, i64 8
-  %44 = load i8, ptr %43, align 8
-  %t.1.i19 = trunc i8 %44 to i1
-  %45 = insertvalue { ptr, i1 } poison, ptr %t.0.i18, 0
-  %46 = insertvalue { ptr, i1 } %45, i1 %t.1.i19, 1
-  br label %bb10
+"_ZN4core6result19Result$LT$T$C$E$GT$6unwrap17he85693edfc086aa4E.exit21": ; preds = %bb14
+  %43 = getelementptr inbounds i8, ptr %_24, i64 8
+  %t.0.i18 = load ptr, ptr %43, align 8
+  %44 = getelementptr inbounds i8, ptr %43, i64 8
+  %45 = load i8, ptr %44, align 8
+  %t.1.i19 = trunc i8 %45 to i1
+  %46 = insertvalue { ptr, i1 } poison, ptr %t.0.i18, 0
+  %47 = insertvalue { ptr, i1 } %46, i1 %t.1.i19, 1
+  br label %bb15
 
-bb10:                                             ; preds = %"_ZN4core6result19Result$LT$T$C$E$GT$6unwrap17he85693edfc086aa4E.exit21"
-  %47 = extractvalue { ptr, i1 } %46, 0
-  %48 = extractvalue { ptr, i1 } %46, 1
-  store ptr %47, ptr %map, align 8
-  %49 = getelementptr inbounds i8, ptr %map, i64 8
-  %50 = zext i1 %48 to i8
-  store i8 %50, ptr %49, align 8
+bb15:                                             ; preds = %"_ZN4core6result19Result$LT$T$C$E$GT$6unwrap17he85693edfc086aa4E.exit21"
+  %48 = extractvalue { ptr, i1 } %47, 0
+  %49 = extractvalue { ptr, i1 } %47, 1
+  store ptr %48, ptr %map, align 8
+  %50 = getelementptr inbounds i8, ptr %map, i64 8
+  %51 = zext i1 %49 to i8
+  store i8 %51, ptr %50, align 8
 ; invoke <std::sync::poison::mutex::MutexGuard<T> as core::ops::deref::Deref>::deref
-  %_22 = invoke align 8 ptr @"_ZN89_$LT$std..sync..poison..mutex..MutexGuard$LT$T$GT$$u20$as$u20$core..ops..deref..Deref$GT$5deref17h90bfa995e58bcb4eE"(ptr align 8 %map)
-          to label %bb11 unwind label %cleanup6
+  %_28 = invoke align 8 ptr @"_ZN89_$LT$std..sync..poison..mutex..MutexGuard$LT$T$GT$$u20$as$u20$core..ops..deref..Deref$GT$5deref17h90bfa995e58bcb4eE"(ptr align 8 %map)
+          to label %bb16 unwind label %cleanup6
 
-bb41:                                             ; preds = %cleanup6
+bb46:                                             ; preds = %cleanup6
 ; invoke core::ptr::drop_in_place<std::sync::poison::mutex::MutexGuard<std::collections::hash::map::HashMap<alloc::string::String,alloc::string::String>>>
   invoke void @"_ZN4core3ptr154drop_in_place$LT$std..sync..poison..mutex..MutexGuard$LT$std..collections..hash..map..HashMap$LT$alloc..string..String$C$alloc..string..String$GT$$GT$$GT$17hfb466288202da5d3E"(ptr align 8 %map) #27
-          to label %bb57 unwind label %terminate
+          to label %bb61 unwind label %terminate
 
-cleanup6:                                         ; preds = %bb12, %bb11, %bb10
-  %51 = landingpad { ptr, i32 }
+cleanup6:                                         ; preds = %bb17, %bb16, %bb15
+  %52 = landingpad { ptr, i32 }
           cleanup
-  %52 = extractvalue { ptr, i32 } %51, 0
-  %53 = extractvalue { ptr, i32 } %51, 1
-  store ptr %52, ptr %2, align 8
-  %54 = getelementptr inbounds i8, ptr %2, i64 8
-  store i32 %53, ptr %54, align 8
-  br label %bb41
-
-bb11:                                             ; preds = %bb10
-; invoke std::collections::hash::map::HashMap<K,V,S>::get
-  %_21 = invoke align 8 ptr @"_ZN3std11collections4hash3map24HashMap$LT$K$C$V$C$S$GT$3get17h09cdb2fa6682ccc2E"(ptr align 8 %_22, ptr align 8 %key)
-          to label %bb12 unwind label %cleanup6
-
-bb12:                                             ; preds = %bb11
-; invoke core::option::Option<&T>::cloned
-  invoke void @"_ZN4core6option19Option$LT$$RF$T$GT$6cloned17h4d40ee98af711617E"(ptr sret([24 x i8]) align 8 %cached_answer, ptr align 8 %_21)
-          to label %bb13 unwind label %cleanup6
-
-bb13:                                             ; preds = %bb12
-  store i8 1, ptr %_59, align 1
-; invoke core::ptr::drop_in_place<std::sync::poison::mutex::MutexGuard<std::collections::hash::map::HashMap<alloc::string::String,alloc::string::String>>>
-  invoke void @"_ZN4core3ptr154drop_in_place$LT$std..sync..poison..mutex..MutexGuard$LT$std..collections..hash..map..HashMap$LT$alloc..string..String$C$alloc..string..String$GT$$GT$$GT$17hfb466288202da5d3E"(ptr align 8 %map)
-          to label %bb14 unwind label %cleanup5
-
-bb14:                                             ; preds = %bb13
-  %55 = load i64, ptr %cached_answer, align 8
-  %56 = icmp eq i64 %55, -9223372036854775808
-  %_25 = select i1 %56, i64 0, i64 1
-  %57 = icmp eq i64 %_25, 1
-  br i1 %57, label %bb15, label %bb21
-
-bb15:                                             ; preds = %bb14
-  store i8 0, ptr %_59, align 1
-  call void @llvm.memcpy.p0.p0.i64(ptr align 8 %answer, ptr align 8 %cached_answer, i64 24, i1 false)
-; invoke core::fmt::rt::Argument::new_display
-  invoke void @_ZN4core3fmt2rt8Argument11new_display17hc841db86ea8dc84aE(ptr sret([16 x i8]) align 8 %_32, ptr align 8 %_1)
-          to label %bb16 unwind label %cleanup7
-
-bb21:                                             ; preds = %bb14
-  %_40 = getelementptr inbounds i8, ptr %_1, i64 24
-; invoke <alloc::string::String as core::ops::deref::Deref>::deref
-  %58 = invoke { ptr, i64 } @"_ZN65_$LT$alloc..string..String$u20$as$u20$core..ops..deref..Deref$GT$5deref17hc8ac4f23cdfd1ccdE"(ptr align 8 %_40)
-          to label %bb22 unwind label %cleanup8
-
-bb40:                                             ; preds = %cleanup7
-; invoke core::ptr::drop_in_place<alloc::string::String>
-  invoke void @"_ZN4core3ptr42drop_in_place$LT$alloc..string..String$GT$17h6c947ed5f322b78dE"(ptr align 8 %answer) #27
-          to label %bb55 unwind label %terminate
-
-cleanup7:                                         ; preds = %bb19, %bb18, %bb17, %bb16, %bb15
-  %59 = landingpad { ptr, i32 }
-          cleanup
-  %60 = extractvalue { ptr, i32 } %59, 0
-  %61 = extractvalue { ptr, i32 } %59, 1
-  store ptr %60, ptr %2, align 8
-  %62 = getelementptr inbounds i8, ptr %2, i64 8
-  store i32 %61, ptr %62, align 8
-  br label %bb40
+  %53 = extractvalue { ptr, i32 } %52, 0
+  %54 = extractvalue { ptr, i32 } %52, 1
+  store ptr %53, ptr %2, align 8
+  %55 = getelementptr inbounds i8, ptr %2, i64 8
+  store i32 %54, ptr %55, align 8
+  br label %bb46
 
 bb16:                                             ; preds = %bb15
-; invoke core::fmt::rt::Argument::new_display
-  invoke void @_ZN4core3fmt2rt8Argument11new_display17hc841db86ea8dc84aE(ptr sret([16 x i8]) align 8 %_34, ptr align 8 %uid)
-          to label %bb17 unwind label %cleanup7
+; invoke std::collections::hash::map::HashMap<K,V,S>::get
+  %_27 = invoke align 8 ptr @"_ZN3std11collections4hash3map24HashMap$LT$K$C$V$C$S$GT$3get17h09cdb2fa6682ccc2E"(ptr align 8 %_28, ptr align 8 %key)
+          to label %bb17 unwind label %cleanup6
 
 bb17:                                             ; preds = %bb16
-; invoke core::fmt::rt::Argument::new_display
-  invoke void @_ZN4core3fmt2rt8Argument11new_display17hc841db86ea8dc84aE(ptr sret([16 x i8]) align 8 %_36, ptr align 8 %answer)
-          to label %bb18 unwind label %cleanup7
+; invoke core::option::Option<&T>::cloned
+  invoke void @"_ZN4core6option19Option$LT$$RF$T$GT$6cloned17h4d40ee98af711617E"(ptr sret([24 x i8]) align 8 %cached_answer, ptr align 8 %_27)
+          to label %bb18 unwind label %cleanup6
 
 bb18:                                             ; preds = %bb17
-  %63 = getelementptr inbounds %"core::fmt::rt::Argument<'_>", ptr %_31, i64 0
-  call void @llvm.memcpy.p0.p0.i64(ptr align 8 %63, ptr align 8 %_32, i64 16, i1 false)
-  %64 = getelementptr inbounds %"core::fmt::rt::Argument<'_>", ptr %_31, i64 1
-  call void @llvm.memcpy.p0.p0.i64(ptr align 8 %64, ptr align 8 %_34, i64 16, i1 false)
-  %65 = getelementptr inbounds %"core::fmt::rt::Argument<'_>", ptr %_31, i64 2
-  call void @llvm.memcpy.p0.p0.i64(ptr align 8 %65, ptr align 8 %_36, i64 16, i1 false)
-; invoke core::fmt::Arguments::new_v1
-  invoke void @_ZN4core3fmt9Arguments6new_v117hb9cc7a4787afb16eE(ptr sret([48 x i8]) align 8 %_28, ptr align 8 @alloc_dd41df3e1bffe297cf2210e56da76f3a, ptr align 8 %_31)
-          to label %bb19 unwind label %cleanup7
+  store i8 1, ptr %_65, align 1
+; invoke core::ptr::drop_in_place<std::sync::poison::mutex::MutexGuard<std::collections::hash::map::HashMap<alloc::string::String,alloc::string::String>>>
+  invoke void @"_ZN4core3ptr154drop_in_place$LT$std..sync..poison..mutex..MutexGuard$LT$std..collections..hash..map..HashMap$LT$alloc..string..String$C$alloc..string..String$GT$$GT$$GT$17hfb466288202da5d3E"(ptr align 8 %map)
+          to label %bb19 unwind label %cleanup5
 
 bb19:                                             ; preds = %bb18
-; invoke std::io::stdio::_print
-  invoke void @_ZN3std2io5stdio6_print17h7dc06ae3ae8ea74cE(ptr align 8 %_28)
-          to label %bb20 unwind label %cleanup7
+  %56 = load i64, ptr %cached_answer, align 8
+  %57 = icmp eq i64 %56, -9223372036854775808
+  %_31 = select i1 %57, i64 0, i64 1
+  %58 = icmp eq i64 %_31, 1
+  br i1 %58, label %bb20, label %bb26
 
 bb20:                                             ; preds = %bb19
+  store i8 0, ptr %_65, align 1
+  call void @llvm.memcpy.p0.p0.i64(ptr align 8 %answer, ptr align 8 %cached_answer, i64 24, i1 false)
+; invoke core::fmt::rt::Argument::new_display
+  invoke void @_ZN4core3fmt2rt8Argument11new_display17hc841db86ea8dc84aE(ptr sret([16 x i8]) align 8 %_38, ptr align 8 %_1)
+          to label %bb21 unwind label %cleanup7
+
+bb26:                                             ; preds = %bb19
+  %_46 = getelementptr inbounds i8, ptr %_1, i64 24
+; invoke <alloc::string::String as core::ops::deref::Deref>::deref
+  %59 = invoke { ptr, i64 } @"_ZN65_$LT$alloc..string..String$u20$as$u20$core..ops..deref..Deref$GT$5deref17hc8ac4f23cdfd1ccdE"(ptr align 8 %_46)
+          to label %bb27 unwind label %cleanup8
+
+bb45:                                             ; preds = %cleanup7
+; invoke core::ptr::drop_in_place<alloc::string::String>
+  invoke void @"_ZN4core3ptr42drop_in_place$LT$alloc..string..String$GT$17h6c947ed5f322b78dE"(ptr align 8 %answer) #27
+          to label %bb59 unwind label %terminate
+
+cleanup7:                                         ; preds = %bb24, %bb23, %bb22, %bb21, %bb20
+  %60 = landingpad { ptr, i32 }
+          cleanup
+  %61 = extractvalue { ptr, i32 } %60, 0
+  %62 = extractvalue { ptr, i32 } %60, 1
+  store ptr %61, ptr %2, align 8
+  %63 = getelementptr inbounds i8, ptr %2, i64 8
+  store i32 %62, ptr %63, align 8
+  br label %bb45
+
+bb21:                                             ; preds = %bb20
+; invoke core::fmt::rt::Argument::new_display
+  invoke void @_ZN4core3fmt2rt8Argument11new_display17hc841db86ea8dc84aE(ptr sret([16 x i8]) align 8 %_40, ptr align 8 %uid)
+          to label %bb22 unwind label %cleanup7
+
+bb22:                                             ; preds = %bb21
+; invoke core::fmt::rt::Argument::new_display
+  invoke void @_ZN4core3fmt2rt8Argument11new_display17hc841db86ea8dc84aE(ptr sret([16 x i8]) align 8 %_42, ptr align 8 %answer)
+          to label %bb23 unwind label %cleanup7
+
+bb23:                                             ; preds = %bb22
+  %64 = getelementptr inbounds %"core::fmt::rt::Argument<'_>", ptr %_37, i64 0
+  call void @llvm.memcpy.p0.p0.i64(ptr align 8 %64, ptr align 8 %_38, i64 16, i1 false)
+  %65 = getelementptr inbounds %"core::fmt::rt::Argument<'_>", ptr %_37, i64 1
+  call void @llvm.memcpy.p0.p0.i64(ptr align 8 %65, ptr align 8 %_40, i64 16, i1 false)
+  %66 = getelementptr inbounds %"core::fmt::rt::Argument<'_>", ptr %_37, i64 2
+  call void @llvm.memcpy.p0.p0.i64(ptr align 8 %66, ptr align 8 %_42, i64 16, i1 false)
+; invoke core::fmt::Arguments::new_v1
+  invoke void @_ZN4core3fmt9Arguments6new_v117hb9cc7a4787afb16eE(ptr sret([48 x i8]) align 8 %_34, ptr align 8 @alloc_dd41df3e1bffe297cf2210e56da76f3a, ptr align 8 %_37)
+          to label %bb24 unwind label %cleanup7
+
+bb24:                                             ; preds = %bb23
+; invoke std::io::stdio::_print
+  invoke void @_ZN3std2io5stdio6_print17h7dc06ae3ae8ea74cE(ptr align 8 %_34)
+          to label %bb25 unwind label %cleanup7
+
+bb25:                                             ; preds = %bb24
 ; invoke core::ptr::drop_in_place<alloc::string::String>
   invoke void @"_ZN4core3ptr42drop_in_place$LT$alloc..string..String$GT$17h6c947ed5f322b78dE"(ptr align 8 %answer)
-          to label %bb49 unwind label %cleanup8
+          to label %bb53 unwind label %cleanup8
 
-bb55:                                             ; preds = %bb51, %bb52, %bb40, %cleanup8
-  %66 = load i64, ptr %cached_answer, align 8
-  %67 = icmp eq i64 %66, -9223372036854775808
-  %_63 = select i1 %67, i64 0, i64 1
-  %68 = icmp eq i64 %_63, 1
-  br i1 %68, label %bb53, label %bb57
+bb59:                                             ; preds = %bb55, %bb56, %bb45, %cleanup8
+  %67 = load i64, ptr %cached_answer, align 8
+  %68 = icmp eq i64 %67, -9223372036854775808
+  %_69 = select i1 %68, i64 0, i64 1
+  %69 = icmp eq i64 %_69, 1
+  br i1 %69, label %bb57, label %bb61
 
-cleanup8:                                         ; preds = %bb22, %bb21, %bb20
-  %69 = landingpad { ptr, i32 }
+cleanup8:                                         ; preds = %bb27, %bb26, %bb25
+  %70 = landingpad { ptr, i32 }
           cleanup
-  %70 = extractvalue { ptr, i32 } %69, 0
-  %71 = extractvalue { ptr, i32 } %69, 1
-  store ptr %70, ptr %2, align 8
-  %72 = getelementptr inbounds i8, ptr %2, i64 8
-  store i32 %71, ptr %72, align 8
-  br label %bb55
+  %71 = extractvalue { ptr, i32 } %70, 0
+  %72 = extractvalue { ptr, i32 } %70, 1
+  store ptr %71, ptr %2, align 8
+  %73 = getelementptr inbounds i8, ptr %2, i64 8
+  store i32 %72, ptr %73, align 8
+  br label %bb59
 
-bb49:                                             ; preds = %bb34, %bb20
-  %73 = load i64, ptr %cached_answer, align 8
-  %74 = icmp eq i64 %73, -9223372036854775808
-  %_62 = select i1 %74, i64 0, i64 1
-  %75 = icmp eq i64 %_62, 1
-  br i1 %75, label %bb47, label %bb46
+bb53:                                             ; preds = %bb39, %bb25
+  %74 = load i64, ptr %cached_answer, align 8
+  %75 = icmp eq i64 %74, -9223372036854775808
+  %_68 = select i1 %75, i64 0, i64 1
+  %76 = icmp eq i64 %_68, 1
+  br i1 %76, label %bb51, label %bb50
 
-terminate:                                        ; preds = %bb44, %bb43, %bb42, %bb56, %bb41, %bb54, %bb51, %bb39, %bb40
-  %76 = landingpad { ptr, i32 }
+terminate:                                        ; preds = %bb48, %bb47, %bb60, %bb46, %bb58, %bb55, %bb44, %bb45
+  %77 = landingpad { ptr, i32 }
           filter [0 x ptr] zeroinitializer
-  %77 = extractvalue { ptr, i32 } %76, 0
-  %78 = extractvalue { ptr, i32 } %76, 1
+  %78 = extractvalue { ptr, i32 } %77, 0
+  %79 = extractvalue { ptr, i32 } %77, 1
 ; call core::panicking::panic_in_cleanup
   call void @_ZN4core9panicking16panic_in_cleanup17hf00910ed745f923dE() #28
   unreachable
 
-bb22:                                             ; preds = %bb21
-  %_39.0 = extractvalue { ptr, i64 } %58, 0
-  %_39.1 = extractvalue { ptr, i64 } %58, 1
+bb27:                                             ; preds = %bb26
+  %_45.0 = extractvalue { ptr, i64 } %59, 0
+  %_45.1 = extractvalue { ptr, i64 } %59, 1
 ; invoke llm_ac_demo::call_llm
-  invoke void @_ZN11llm_ac_demo8call_llm17h0d523adffe7a8059E(ptr sret([24 x i8]) align 8 %answer1, ptr align 1 %_39.0, i64 %_39.1)
-          to label %bb23 unwind label %cleanup8
+  invoke void @_ZN11llm_ac_demo8call_llm17h0d523adffe7a8059E(ptr sret([24 x i8]) align 8 %answer2, ptr align 1 %_45.0, i64 %_45.1)
+          to label %bb28 unwind label %cleanup8
 
-bb23:                                             ; preds = %bb22
-  store i8 1, ptr %_61, align 1
+bb28:                                             ; preds = %bb27
+  store i8 1, ptr %_67, align 1
 ; invoke core::fmt::rt::Argument::new_display
-  invoke void @_ZN4core3fmt2rt8Argument11new_display17hc841db86ea8dc84aE(ptr sret([16 x i8]) align 8 %_46, ptr align 8 %_1)
-          to label %bb24 unwind label %cleanup9
+  invoke void @_ZN4core3fmt2rt8Argument11new_display17hc841db86ea8dc84aE(ptr sret([16 x i8]) align 8 %_52, ptr align 8 %_1)
+          to label %bb29 unwind label %cleanup9
 
-bb52:                                             ; preds = %bb39, %cleanup9.body
-  %79 = load i8, ptr %_61, align 1
-  %80 = trunc i8 %79 to i1
-  br i1 %80, label %bb51, label %bb55
+bb56:                                             ; preds = %bb44, %cleanup9.body
+  %80 = load i8, ptr %_67, align 1
+  %81 = trunc i8 %80 to i1
+  br i1 %81, label %bb55, label %bb59
 
-cleanup9:                                         ; preds = %bb33, %bb28, %bb27, %bb26, %bb25, %bb24, %bb23
-  %81 = landingpad { ptr, i32 }
+cleanup9:                                         ; preds = %bb38, %bb33, %bb32, %bb31, %bb30, %bb29, %bb28
+  %82 = landingpad { ptr, i32 }
           cleanup
   br label %cleanup9.body
 
 cleanup9.body:                                    ; preds = %bb5.i, %cleanup9
-  %eh.lpad-body = phi { ptr, i32 } [ %81, %cleanup9 ], [ %106, %bb5.i ]
-  %82 = extractvalue { ptr, i32 } %eh.lpad-body, 0
-  %83 = extractvalue { ptr, i32 } %eh.lpad-body, 1
-  store ptr %82, ptr %2, align 8
-  %84 = getelementptr inbounds i8, ptr %2, i64 8
-  store i32 %83, ptr %84, align 8
-  br label %bb52
-
-bb24:                                             ; preds = %bb23
-; invoke core::fmt::rt::Argument::new_display
-  invoke void @_ZN4core3fmt2rt8Argument11new_display17hc841db86ea8dc84aE(ptr sret([16 x i8]) align 8 %_48, ptr align 8 %answer1)
-          to label %bb25 unwind label %cleanup9
-
-bb25:                                             ; preds = %bb24
-  %85 = getelementptr inbounds %"core::fmt::rt::Argument<'_>", ptr %_45, i64 0
-  call void @llvm.memcpy.p0.p0.i64(ptr align 8 %85, ptr align 8 %_46, i64 16, i1 false)
-  %86 = getelementptr inbounds %"core::fmt::rt::Argument<'_>", ptr %_45, i64 1
-  call void @llvm.memcpy.p0.p0.i64(ptr align 8 %86, ptr align 8 %_48, i64 16, i1 false)
-; invoke core::fmt::Arguments::new_v1
-  invoke void @_ZN4core3fmt9Arguments6new_v117h61e3ce95ee153c2dE(ptr sret([48 x i8]) align 8 %_42, ptr align 8 @alloc_7ea3a35effa4486665c106d843af706d, ptr align 8 %_45)
-          to label %bb26 unwind label %cleanup9
-
-bb26:                                             ; preds = %bb25
-; invoke std::io::stdio::_print
-  invoke void @_ZN3std2io5stdio6_print17h7dc06ae3ae8ea74cE(ptr align 8 %_42)
-          to label %bb27 unwind label %cleanup9
-
-bb27:                                             ; preds = %bb26
-  %_53 = getelementptr inbounds i8, ptr %_1, i64 48
-; invoke <alloc::sync::Arc<T,A> as core::ops::deref::Deref>::deref
-  %_52 = invoke align 8 ptr @"_ZN73_$LT$alloc..sync..Arc$LT$T$C$A$GT$$u20$as$u20$core..ops..deref..Deref$GT$5deref17h2ccda629503dab60E"(ptr align 8 %_53)
-          to label %bb28 unwind label %cleanup9
-
-bb28:                                             ; preds = %bb27
-; invoke std::sync::poison::mutex::Mutex<T>::lock
-  invoke void @"_ZN3std4sync6poison5mutex14Mutex$LT$T$GT$4lock17hcf505743eb7939e4E"(ptr sret([24 x i8]) align 8 %_51, ptr align 8 %_52)
-          to label %bb29 unwind label %cleanup9
+  %eh.lpad-body = phi { ptr, i32 } [ %82, %cleanup9 ], [ %107, %bb5.i ]
+  %83 = extractvalue { ptr, i32 } %eh.lpad-body, 0
+  %84 = extractvalue { ptr, i32 } %eh.lpad-body, 1
+  store ptr %83, ptr %2, align 8
+  %85 = getelementptr inbounds i8, ptr %2, i64 8
+  store i32 %84, ptr %85, align 8
+  br label %bb56
 
 bb29:                                             ; preds = %bb28
-  %_2.i = load i64, ptr %_51, align 8
-  %87 = icmp eq i64 %_2.i, 0
-  br i1 %87, label %"_ZN4core6result19Result$LT$T$C$E$GT$6unwrap17he85693edfc086aa4E.exit", label %bb2.i
+; invoke core::fmt::rt::Argument::new_display
+  invoke void @_ZN4core3fmt2rt8Argument11new_display17hc841db86ea8dc84aE(ptr sret([16 x i8]) align 8 %_54, ptr align 8 %answer2)
+          to label %bb30 unwind label %cleanup9
 
-bb2.i:                                            ; preds = %bb29
-  %88 = getelementptr inbounds i8, ptr %_51, i64 8
-  %89 = load ptr, ptr %88, align 8
-  %90 = getelementptr inbounds i8, ptr %88, i64 8
-  %91 = load i8, ptr %90, align 8
-  %92 = trunc i8 %91 to i1
-  store ptr %89, ptr %e.i, align 8
-  %93 = getelementptr inbounds i8, ptr %e.i, i64 8
-  %94 = zext i1 %92 to i8
-  store i8 %94, ptr %93, align 8
+bb30:                                             ; preds = %bb29
+  %86 = getelementptr inbounds %"core::fmt::rt::Argument<'_>", ptr %_51, i64 0
+  call void @llvm.memcpy.p0.p0.i64(ptr align 8 %86, ptr align 8 %_52, i64 16, i1 false)
+  %87 = getelementptr inbounds %"core::fmt::rt::Argument<'_>", ptr %_51, i64 1
+  call void @llvm.memcpy.p0.p0.i64(ptr align 8 %87, ptr align 8 %_54, i64 16, i1 false)
+; invoke core::fmt::Arguments::new_v1
+  invoke void @_ZN4core3fmt9Arguments6new_v117h61e3ce95ee153c2dE(ptr sret([48 x i8]) align 8 %_48, ptr align 8 @alloc_7ea3a35effa4486665c106d843af706d, ptr align 8 %_51)
+          to label %bb31 unwind label %cleanup9
+
+bb31:                                             ; preds = %bb30
+; invoke std::io::stdio::_print
+  invoke void @_ZN3std2io5stdio6_print17h7dc06ae3ae8ea74cE(ptr align 8 %_48)
+          to label %bb32 unwind label %cleanup9
+
+bb32:                                             ; preds = %bb31
+  %_59 = getelementptr inbounds i8, ptr %_1, i64 48
+; invoke <alloc::sync::Arc<T,A> as core::ops::deref::Deref>::deref
+  %_58 = invoke align 8 ptr @"_ZN73_$LT$alloc..sync..Arc$LT$T$C$A$GT$$u20$as$u20$core..ops..deref..Deref$GT$5deref17h2ccda629503dab60E"(ptr align 8 %_59)
+          to label %bb33 unwind label %cleanup9
+
+bb33:                                             ; preds = %bb32
+; invoke std::sync::poison::mutex::Mutex<T>::lock
+  invoke void @"_ZN3std4sync6poison5mutex14Mutex$LT$T$GT$4lock17hcf505743eb7939e4E"(ptr sret([24 x i8]) align 8 %_57, ptr align 8 %_58)
+          to label %bb34 unwind label %cleanup9
+
+bb34:                                             ; preds = %bb33
+  %_2.i = load i64, ptr %_57, align 8
+  %88 = icmp eq i64 %_2.i, 0
+  br i1 %88, label %"_ZN4core6result19Result$LT$T$C$E$GT$6unwrap17he85693edfc086aa4E.exit", label %bb2.i
+
+bb2.i:                                            ; preds = %bb34
+  %89 = getelementptr inbounds i8, ptr %_57, i64 8
+  %90 = load ptr, ptr %89, align 8
+  %91 = getelementptr inbounds i8, ptr %89, i64 8
+  %92 = load i8, ptr %91, align 8
+  %93 = trunc i8 %92 to i1
+  store ptr %90, ptr %e.i, align 8
+  %94 = getelementptr inbounds i8, ptr %e.i, i64 8
+  %95 = zext i1 %93 to i8
+  store i8 %95, ptr %94, align 8
 ; invoke core::result::unwrap_failed
-  invoke void @_ZN4core6result13unwrap_failed17h046bdb3bae4a9eafE(ptr align 1 @alloc_00ae4b301f7fab8ac9617c03fcbd7274, i64 43, ptr align 1 %e.i, ptr align 8 @vtable.5, ptr align 8 @alloc_7fa630e815198f22ddd65c9e29f7be77) #25
+  invoke void @_ZN4core6result13unwrap_failed17h046bdb3bae4a9eafE(ptr align 1 @alloc_00ae4b301f7fab8ac9617c03fcbd7274, i64 43, ptr align 1 %e.i, ptr align 8 @vtable.5, ptr align 8 @alloc_8c14b54478955c272a11424839a0cab4) #25
           to label %unreachable.i unwind label %cleanup.i
 
 cleanup.i:                                        ; preds = %bb2.i
-  %95 = landingpad { ptr, i32 }
+  %96 = landingpad { ptr, i32 }
           cleanup
-  %96 = extractvalue { ptr, i32 } %95, 0
-  %97 = extractvalue { ptr, i32 } %95, 1
-  store ptr %96, ptr %1, align 8
-  %98 = getelementptr inbounds i8, ptr %1, i64 8
-  store i32 %97, ptr %98, align 8
+  %97 = extractvalue { ptr, i32 } %96, 0
+  %98 = extractvalue { ptr, i32 } %96, 1
+  store ptr %97, ptr %1, align 8
+  %99 = getelementptr inbounds i8, ptr %1, i64 8
+  store i32 %98, ptr %99, align 8
 ; invoke core::ptr::drop_in_place<std::sync::poison::PoisonError<std::sync::poison::mutex::MutexGuard<std::collections::hash::map::HashMap<alloc::string::String,alloc::string::String>>>>
   invoke void @"_ZN4core3ptr192drop_in_place$LT$std..sync..poison..PoisonError$LT$std..sync..poison..mutex..MutexGuard$LT$std..collections..hash..map..HashMap$LT$alloc..string..String$C$alloc..string..String$GT$$GT$$GT$$GT$17h2b199cf85e6f7835E"(ptr align 8 %e.i) #27
           to label %bb5.i unwind label %terminate.i
@@ -16038,149 +16456,144 @@ unreachable.i:                                    ; preds = %bb2.i
   unreachable
 
 terminate.i:                                      ; preds = %cleanup.i
-  %99 = landingpad { ptr, i32 }
+  %100 = landingpad { ptr, i32 }
           cleanup
           filter [0 x ptr] zeroinitializer
-  %100 = extractvalue { ptr, i32 } %99, 0
-  %101 = extractvalue { ptr, i32 } %99, 1
+  %101 = extractvalue { ptr, i32 } %100, 0
+  %102 = extractvalue { ptr, i32 } %100, 1
 ; call core::panicking::panic_in_cleanup
   call void @_ZN4core9panicking16panic_in_cleanup17hf00910ed745f923dE() #28
   unreachable
 
 bb5.i:                                            ; preds = %cleanup.i
-  %102 = load ptr, ptr %1, align 8
-  %103 = getelementptr inbounds i8, ptr %1, i64 8
-  %104 = load i32, ptr %103, align 8
-  %105 = insertvalue { ptr, i32 } poison, ptr %102, 0
-  %106 = insertvalue { ptr, i32 } %105, i32 %104, 1
+  %103 = load ptr, ptr %1, align 8
+  %104 = getelementptr inbounds i8, ptr %1, i64 8
+  %105 = load i32, ptr %104, align 8
+  %106 = insertvalue { ptr, i32 } poison, ptr %103, 0
+  %107 = insertvalue { ptr, i32 } %106, i32 %105, 1
   br label %cleanup9.body
 
-"_ZN4core6result19Result$LT$T$C$E$GT$6unwrap17he85693edfc086aa4E.exit": ; preds = %bb29
-  %107 = getelementptr inbounds i8, ptr %_51, i64 8
-  %t.0.i = load ptr, ptr %107, align 8
-  %108 = getelementptr inbounds i8, ptr %107, i64 8
-  %109 = load i8, ptr %108, align 8
-  %t.1.i = trunc i8 %109 to i1
-  %110 = insertvalue { ptr, i1 } poison, ptr %t.0.i, 0
-  %111 = insertvalue { ptr, i1 } %110, i1 %t.1.i, 1
-  br label %bb30
+"_ZN4core6result19Result$LT$T$C$E$GT$6unwrap17he85693edfc086aa4E.exit": ; preds = %bb34
+  %108 = getelementptr inbounds i8, ptr %_57, i64 8
+  %t.0.i = load ptr, ptr %108, align 8
+  %109 = getelementptr inbounds i8, ptr %108, i64 8
+  %110 = load i8, ptr %109, align 8
+  %t.1.i = trunc i8 %110 to i1
+  %111 = insertvalue { ptr, i1 } poison, ptr %t.0.i, 0
+  %112 = insertvalue { ptr, i1 } %111, i1 %t.1.i, 1
+  br label %bb35
 
-bb30:                                             ; preds = %"_ZN4core6result19Result$LT$T$C$E$GT$6unwrap17he85693edfc086aa4E.exit"
-  %112 = extractvalue { ptr, i1 } %111, 0
-  %113 = extractvalue { ptr, i1 } %111, 1
-  store ptr %112, ptr %map2, align 8
-  %114 = getelementptr inbounds i8, ptr %map2, i64 8
-  %115 = zext i1 %113 to i8
-  store i8 %115, ptr %114, align 8
+bb35:                                             ; preds = %"_ZN4core6result19Result$LT$T$C$E$GT$6unwrap17he85693edfc086aa4E.exit"
+  %113 = extractvalue { ptr, i1 } %112, 0
+  %114 = extractvalue { ptr, i1 } %112, 1
+  store ptr %113, ptr %map3, align 8
+  %115 = getelementptr inbounds i8, ptr %map3, i64 8
+  %116 = zext i1 %114 to i8
+  store i8 %116, ptr %115, align 8
 ; invoke <std::sync::poison::mutex::MutexGuard<T> as core::ops::deref::DerefMut>::deref_mut
-  %_55 = invoke align 8 ptr @"_ZN92_$LT$std..sync..poison..mutex..MutexGuard$LT$T$GT$$u20$as$u20$core..ops..deref..DerefMut$GT$9deref_mut17hb57e35e9817d17dbE"(ptr align 8 %map2)
-          to label %bb31 unwind label %cleanup10
+  %_61 = invoke align 8 ptr @"_ZN92_$LT$std..sync..poison..mutex..MutexGuard$LT$T$GT$$u20$as$u20$core..ops..deref..DerefMut$GT$9deref_mut17hb57e35e9817d17dbE"(ptr align 8 %map3)
+          to label %bb36 unwind label %cleanup10
 
-bb39:                                             ; preds = %cleanup10
+bb44:                                             ; preds = %cleanup10
 ; invoke core::ptr::drop_in_place<std::sync::poison::mutex::MutexGuard<std::collections::hash::map::HashMap<alloc::string::String,alloc::string::String>>>
-  invoke void @"_ZN4core3ptr154drop_in_place$LT$std..sync..poison..mutex..MutexGuard$LT$std..collections..hash..map..HashMap$LT$alloc..string..String$C$alloc..string..String$GT$$GT$$GT$17hfb466288202da5d3E"(ptr align 8 %map2) #27
-          to label %bb52 unwind label %terminate
+  invoke void @"_ZN4core3ptr154drop_in_place$LT$std..sync..poison..mutex..MutexGuard$LT$std..collections..hash..map..HashMap$LT$alloc..string..String$C$alloc..string..String$GT$$GT$$GT$17hfb466288202da5d3E"(ptr align 8 %map3) #27
+          to label %bb56 unwind label %terminate
 
-cleanup10:                                        ; preds = %bb32, %bb31, %bb30
-  %116 = landingpad { ptr, i32 }
+cleanup10:                                        ; preds = %bb37, %bb36, %bb35
+  %117 = landingpad { ptr, i32 }
           cleanup
-  %117 = extractvalue { ptr, i32 } %116, 0
-  %118 = extractvalue { ptr, i32 } %116, 1
-  store ptr %117, ptr %2, align 8
-  %119 = getelementptr inbounds i8, ptr %2, i64 8
-  store i32 %118, ptr %119, align 8
-  br label %bb39
-
-bb31:                                             ; preds = %bb30
-  store i8 0, ptr %_60, align 1
-  call void @llvm.memcpy.p0.p0.i64(ptr align 8 %_57, ptr align 8 %key, i64 24, i1 false)
-  store i8 0, ptr %_61, align 1
-  call void @llvm.memcpy.p0.p0.i64(ptr align 8 %_58, ptr align 8 %answer1, i64 24, i1 false)
-; invoke std::collections::hash::map::HashMap<K,V,S>::insert
-  invoke void @"_ZN3std11collections4hash3map24HashMap$LT$K$C$V$C$S$GT$6insert17h3c2e4f5bcdb13fd4E"(ptr sret([24 x i8]) align 8 %_54, ptr align 8 %_55, ptr align 8 %_57, ptr align 8 %_58)
-          to label %bb32 unwind label %cleanup10
-
-bb32:                                             ; preds = %bb31
-; invoke core::ptr::drop_in_place<core::option::Option<alloc::string::String>>
-  invoke void @"_ZN4core3ptr70drop_in_place$LT$core..option..Option$LT$alloc..string..String$GT$$GT$17h46b66f85b6f135b4E"(ptr align 8 %_54)
-          to label %bb33 unwind label %cleanup10
-
-bb33:                                             ; preds = %bb32
-; invoke core::ptr::drop_in_place<std::sync::poison::mutex::MutexGuard<std::collections::hash::map::HashMap<alloc::string::String,alloc::string::String>>>
-  invoke void @"_ZN4core3ptr154drop_in_place$LT$std..sync..poison..mutex..MutexGuard$LT$std..collections..hash..map..HashMap$LT$alloc..string..String$C$alloc..string..String$GT$$GT$$GT$17hfb466288202da5d3E"(ptr align 8 %map2)
-          to label %bb34 unwind label %cleanup9
-
-bb34:                                             ; preds = %bb33
-  store i8 0, ptr %_61, align 1
-  br label %bb49
-
-bb47:                                             ; preds = %bb49
-  %120 = load i8, ptr %_59, align 1
-  %121 = trunc i8 %120 to i1
-  br i1 %121, label %bb48, label %bb46
-
-bb46:                                             ; preds = %bb48, %bb47, %bb49
-  store i8 0, ptr %_59, align 1
-  %122 = load i8, ptr %_60, align 1
-  %123 = trunc i8 %122 to i1
-  br i1 %123, label %bb50, label %bb35
-
-bb48:                                             ; preds = %bb47
-; invoke core::ptr::drop_in_place<alloc::string::String>
-  invoke void @"_ZN4core3ptr42drop_in_place$LT$alloc..string..String$GT$17h6c947ed5f322b78dE"(ptr align 8 %cached_answer)
-          to label %bb46 unwind label %cleanup5
-
-bb35:                                             ; preds = %bb50, %bb46
-  store i8 0, ptr %_60, align 1
-; invoke core::ptr::drop_in_place<alloc::string::String>
-  invoke void @"_ZN4core3ptr42drop_in_place$LT$alloc..string..String$GT$17h6c947ed5f322b78dE"(ptr align 8 %uid)
-          to label %bb36 unwind label %cleanup3
-
-bb50:                                             ; preds = %bb46
-; invoke core::ptr::drop_in_place<alloc::string::String>
-  invoke void @"_ZN4core3ptr42drop_in_place$LT$alloc..string..String$GT$17h6c947ed5f322b78dE"(ptr align 8 %key)
-          to label %bb35 unwind label %cleanup4
+  %118 = extractvalue { ptr, i32 } %117, 0
+  %119 = extractvalue { ptr, i32 } %117, 1
+  store ptr %118, ptr %2, align 8
+  %120 = getelementptr inbounds i8, ptr %2, i64 8
+  store i32 %119, ptr %120, align 8
+  br label %bb44
 
 bb36:                                             ; preds = %bb35
-; invoke core::ptr::drop_in_place<llm_ac_demo::actix_identity::Identity>
-  invoke void @"_ZN4core3ptr58drop_in_place$LT$llm_ac_demo..actix_identity..Identity$GT$17h77296d3ce12e8f23E"(ptr align 8 %identity)
-          to label %bb37 unwind label %cleanup
+  store i8 0, ptr %_66, align 1
+  call void @llvm.memcpy.p0.p0.i64(ptr align 8 %_63, ptr align 8 %key, i64 24, i1 false)
+  store i8 0, ptr %_67, align 1
+  call void @llvm.memcpy.p0.p0.i64(ptr align 8 %_64, ptr align 8 %answer2, i64 24, i1 false)
+; invoke std::collections::hash::map::HashMap<K,V,S>::insert
+  invoke void @"_ZN3std11collections4hash3map24HashMap$LT$K$C$V$C$S$GT$6insert17h3c2e4f5bcdb13fd4E"(ptr sret([24 x i8]) align 8 %_60, ptr align 8 %_61, ptr align 8 %_63, ptr align 8 %_64)
+          to label %bb37 unwind label %cleanup10
 
 bb37:                                             ; preds = %bb36
+; invoke core::ptr::drop_in_place<core::option::Option<alloc::string::String>>
+  invoke void @"_ZN4core3ptr70drop_in_place$LT$core..option..Option$LT$alloc..string..String$GT$$GT$17h46b66f85b6f135b4E"(ptr align 8 %_60)
+          to label %bb38 unwind label %cleanup10
+
+bb38:                                             ; preds = %bb37
+; invoke core::ptr::drop_in_place<std::sync::poison::mutex::MutexGuard<std::collections::hash::map::HashMap<alloc::string::String,alloc::string::String>>>
+  invoke void @"_ZN4core3ptr154drop_in_place$LT$std..sync..poison..mutex..MutexGuard$LT$std..collections..hash..map..HashMap$LT$alloc..string..String$C$alloc..string..String$GT$$GT$$GT$17hfb466288202da5d3E"(ptr align 8 %map3)
+          to label %bb39 unwind label %cleanup9
+
+bb39:                                             ; preds = %bb38
+  store i8 0, ptr %_67, align 1
+  br label %bb53
+
+bb51:                                             ; preds = %bb53
+  %121 = load i8, ptr %_65, align 1
+  %122 = trunc i8 %121 to i1
+  br i1 %122, label %bb52, label %bb50
+
+bb50:                                             ; preds = %bb52, %bb51, %bb53
+  store i8 0, ptr %_65, align 1
+  %123 = load i8, ptr %_66, align 1
+  %124 = trunc i8 %123 to i1
+  br i1 %124, label %bb54, label %bb40
+
+bb52:                                             ; preds = %bb51
+; invoke core::ptr::drop_in_place<alloc::string::String>
+  invoke void @"_ZN4core3ptr42drop_in_place$LT$alloc..string..String$GT$17h6c947ed5f322b78dE"(ptr align 8 %cached_answer)
+          to label %bb50 unwind label %cleanup5
+
+bb40:                                             ; preds = %bb54, %bb50
+  store i8 0, ptr %_66, align 1
+; invoke core::ptr::drop_in_place<alloc::string::String>
+  invoke void @"_ZN4core3ptr42drop_in_place$LT$alloc..string..String$GT$17h6c947ed5f322b78dE"(ptr align 8 %uid)
+          to label %bb41 unwind label %cleanup
+
+bb54:                                             ; preds = %bb50
+; invoke core::ptr::drop_in_place<alloc::string::String>
+  invoke void @"_ZN4core3ptr42drop_in_place$LT$alloc..string..String$GT$17h6c947ed5f322b78dE"(ptr align 8 %key)
+          to label %bb40 unwind label %cleanup4
+
+bb41:                                             ; preds = %bb40
 ; call core::ptr::drop_in_place<llm_ac_demo::spawn_user_query::{{closure}}>
   call void @"_ZN4core3ptr79drop_in_place$LT$llm_ac_demo..spawn_user_query..$u7b$$u7b$closure$u7d$$u7d$$GT$17hf5619558a6c75e9dE"(ptr align 8 %_1)
-  ret void
+  br label %bb43
 
-bb51:                                             ; preds = %bb52
+bb55:                                             ; preds = %bb56
 ; invoke core::ptr::drop_in_place<alloc::string::String>
-  invoke void @"_ZN4core3ptr42drop_in_place$LT$alloc..string..String$GT$17h6c947ed5f322b78dE"(ptr align 8 %answer1) #27
-          to label %bb55 unwind label %terminate
+  invoke void @"_ZN4core3ptr42drop_in_place$LT$alloc..string..String$GT$17h6c947ed5f322b78dE"(ptr align 8 %answer2) #27
+          to label %bb59 unwind label %terminate
 
-bb53:                                             ; preds = %bb55
-  %124 = load i8, ptr %_59, align 1
-  %125 = trunc i8 %124 to i1
-  br i1 %125, label %bb54, label %bb57
+bb57:                                             ; preds = %bb59
+  %125 = load i8, ptr %_65, align 1
+  %126 = trunc i8 %125 to i1
+  br i1 %126, label %bb58, label %bb61
 
-bb54:                                             ; preds = %bb53
+bb58:                                             ; preds = %bb57
 ; invoke core::ptr::drop_in_place<alloc::string::String>
   invoke void @"_ZN4core3ptr42drop_in_place$LT$alloc..string..String$GT$17h6c947ed5f322b78dE"(ptr align 8 %cached_answer) #27
-          to label %bb57 unwind label %terminate
+          to label %bb61 unwind label %terminate
 
-bb58:                                             ; No predecessors!
-  unreachable
-
-bb56:                                             ; preds = %bb57
+bb60:                                             ; preds = %bb61
 ; invoke core::ptr::drop_in_place<alloc::string::String>
   invoke void @"_ZN4core3ptr42drop_in_place$LT$alloc..string..String$GT$17h6c947ed5f322b78dE"(ptr align 8 %key) #27
-          to label %bb42 unwind label %terminate
+          to label %bb47 unwind label %terminate
 
-bb45:                                             ; preds = %bb44
-  %126 = load ptr, ptr %2, align 8
-  %127 = getelementptr inbounds i8, ptr %2, i64 8
-  %128 = load i32, ptr %127, align 8
-  %129 = insertvalue { ptr, i32 } poison, ptr %126, 0
-  %130 = insertvalue { ptr, i32 } %129, i32 %128, 1
-  resume { ptr, i32 } %130
+bb3:                                              ; No predecessors!
+  unreachable
+
+bb49:                                             ; preds = %bb48
+  %127 = load ptr, ptr %2, align 8
+  %128 = getelementptr inbounds i8, ptr %2, i64 8
+  %129 = load i32, ptr %128, align 8
+  %130 = insertvalue { ptr, i32 } poison, ptr %127, 0
+  %131 = insertvalue { ptr, i32 } %130, i32 %129, 1
+  resume { ptr, i32 } %131
 }
 
 ; llm_ac_demo::main
@@ -16313,7 +16726,7 @@ bb2.i6:                                           ; preds = %bb8
   %28 = getelementptr inbounds i8, ptr %e.i3, i64 8
   store ptr %27, ptr %28, align 8
 ; invoke core::result::unwrap_failed
-  invoke void @_ZN4core6result13unwrap_failed17h046bdb3bae4a9eafE(ptr align 1 @alloc_00ae4b301f7fab8ac9617c03fcbd7274, i64 43, ptr align 1 %e.i3, ptr align 8 @vtable.4, ptr align 8 @alloc_4f9222aa64d25a9a9715ce4240131309) #25
+  invoke void @_ZN4core6result13unwrap_failed17h046bdb3bae4a9eafE(ptr align 1 @alloc_00ae4b301f7fab8ac9617c03fcbd7274, i64 43, ptr align 1 %e.i3, ptr align 8 @vtable.4, ptr align 8 @alloc_13cb4465fdab2a59859f3dd02e0f1632) #25
           to label %unreachable.i10 unwind label %cleanup.i7
 
 cleanup.i7:                                       ; preds = %bb2.i6
@@ -16379,7 +16792,7 @@ bb2.i:                                            ; preds = %bb10
   %49 = getelementptr inbounds i8, ptr %e.i, i64 8
   store ptr %48, ptr %49, align 8
 ; invoke core::result::unwrap_failed
-  invoke void @_ZN4core6result13unwrap_failed17h046bdb3bae4a9eafE(ptr align 1 @alloc_00ae4b301f7fab8ac9617c03fcbd7274, i64 43, ptr align 1 %e.i, ptr align 8 @vtable.4, ptr align 8 @alloc_337bd9aae6686f78782dff89a9ad5bc3) #25
+  invoke void @_ZN4core6result13unwrap_failed17h046bdb3bae4a9eafE(ptr align 1 @alloc_00ae4b301f7fab8ac9617c03fcbd7274, i64 43, ptr align 1 %e.i, ptr align 8 @vtable.4, ptr align 8 @alloc_1df7b0bd14cea408937de4a82812234c) #25
           to label %unreachable.i unwind label %cleanup.i
 
 cleanup.i:                                        ; preds = %bb2.i
@@ -16646,6 +17059,10 @@ declare void @"_ZN79_$LT$std..sys..sync..mutex..pthread..Mutex$u20$as$u20$core..
 ; Function Attrs: uwtable
 declare void @"_ZN81_$LT$std..sys..pal..unix..sync..mutex..Mutex$u20$as$u20$core..ops..drop..Drop$GT$4drop17h482f360b54db422eE"(ptr align 8) unnamed_addr #0
 
+; <[A] as core::slice::cmp::SlicePartialEq<B>>::equal
+; Function Attrs: uwtable
+declare zeroext i1 @"_ZN73_$LT$$u5b$A$u5d$$u20$as$u20$core..slice..cmp..SlicePartialEq$LT$B$GT$$GT$5equal17h1c66434116e22d26E"(ptr align 1, i64, ptr align 1, i64) unnamed_addr #0
+
 ; core::char::methods::encode_utf8_raw::do_panic::runtime
 ; Function Attrs: noreturn uwtable
 declare void @_ZN4core4char7methods15encode_utf8_raw8do_panic7runtime17hde0f2a4ca3e58806E(i32, i64, i64, ptr align 8) unnamed_addr #14
@@ -16669,10 +17086,6 @@ declare void @_ZN4core6result13unwrap_failed17h046bdb3bae4a9eafE(ptr align 1, i6
 ; alloc::fmt::format::format_inner
 ; Function Attrs: uwtable
 declare void @_ZN5alloc3fmt6format12format_inner17ha7021dd3b41b5ea8E(ptr sret([24 x i8]) align 8, ptr align 8) unnamed_addr #0
-
-; <[A] as core::slice::cmp::SlicePartialEq<B>>::equal
-; Function Attrs: uwtable
-declare zeroext i1 @"_ZN73_$LT$$u5b$A$u5d$$u20$as$u20$core..slice..cmp..SlicePartialEq$LT$B$GT$$GT$5equal17h1c66434116e22d26E"(ptr align 1, i64, ptr align 1, i64) unnamed_addr #0
 
 ; Function Attrs: nounwind allockind("alloc,zeroed,aligned") allocsize(0) uwtable
 declare noalias ptr @__rust_alloc_zeroed(i64, i64 allocalign) unnamed_addr #19
@@ -16803,5 +17216,5 @@ attributes #28 = { cold noreturn nounwind }
 !0 = !{i32 8, !"PIC Level", i32 2}
 !1 = !{i32 7, !"PIE Level", i32 2}
 !2 = !{!"rustc version 1.86.0-nightly (854f22563 2025-01-31)"}
-!3 = !{i64 4732809148158036}
+!3 = !{i64 4744057667508879}
 !4 = !{}
