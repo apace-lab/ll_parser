@@ -134,19 +134,19 @@ target triple = "arm64-apple-macosx11.0.0"
 @alloc_16c9339a5932ef97eb9eba216f75d2f8 = private unnamed_addr constant <{ [6 x i8] }> <{ [6 x i8] c"query:" }>, align 1
 @alloc_4caa3d20bda40684a2c59e1708b3cdee = private unnamed_addr constant <{ ptr, [8 x i8] }> <{ ptr @alloc_16c9339a5932ef97eb9eba216f75d2f8, [8 x i8] c"\06\00\00\00\00\00\00\00" }>, align 8
 @alloc_4693327ca9c5449cec9b739948ccbb5e = private unnamed_addr constant <{ [7 x i8] }> <{ [7 x i8] c"main.rs" }>, align 1
-@alloc_d20372468ebdb044099a4d985f13aae9 = private unnamed_addr constant <{ ptr, [16 x i8] }> <{ ptr @alloc_4693327ca9c5449cec9b739948ccbb5e, [16 x i8] c"\07\00\00\00\00\00\00\00\A8\00\00\00)\00\00\00" }>, align 8
+@alloc_ba4e0b3734c62db684c8fbced5e599b4 = private unnamed_addr constant <{ ptr, [16 x i8] }> <{ ptr @alloc_4693327ca9c5449cec9b739948ccbb5e, [16 x i8] c"\07\00\00\00\00\00\00\00\AD\00\00\00)\00\00\00" }>, align 8
 @alloc_91d16892003a5ae3285cccf7b8b371ec = private unnamed_addr constant <{ [2 x i8] }> <{ [2 x i8] c" (" }>, align 1
 @alloc_51a64ac0330613c809b89ad96d5e42a1 = private unnamed_addr constant <{ [21 x i8] }> <{ [21 x i8] c") got cached answer: " }>, align 1
 @alloc_49a1e817e911805af64bbc7efb390101 = private unnamed_addr constant <{ [1 x i8] }> <{ [1 x i8] c"\0A" }>, align 1
 @alloc_dd41df3e1bffe297cf2210e56da76f3a = private unnamed_addr constant <{ ptr, [8 x i8], ptr, [8 x i8], ptr, [8 x i8], ptr, [8 x i8] }> <{ ptr inttoptr (i64 1 to ptr), [8 x i8] zeroinitializer, ptr @alloc_91d16892003a5ae3285cccf7b8b371ec, [8 x i8] c"\02\00\00\00\00\00\00\00", ptr @alloc_51a64ac0330613c809b89ad96d5e42a1, [8 x i8] c"\15\00\00\00\00\00\00\00", ptr @alloc_49a1e817e911805af64bbc7efb390101, [8 x i8] c"\01\00\00\00\00\00\00\00" }>, align 8
 @alloc_0b8ceba0698558182ed05c26ef4bd333 = private unnamed_addr constant <{ [17 x i8] }> <{ [17 x i8] c" got new answer: " }>, align 1
 @alloc_7ea3a35effa4486665c106d843af706d = private unnamed_addr constant <{ ptr, [8 x i8], ptr, [8 x i8], ptr, [8 x i8] }> <{ ptr inttoptr (i64 1 to ptr), [8 x i8] zeroinitializer, ptr @alloc_0b8ceba0698558182ed05c26ef4bd333, [8 x i8] c"\11\00\00\00\00\00\00\00", ptr @alloc_49a1e817e911805af64bbc7efb390101, [8 x i8] c"\01\00\00\00\00\00\00\00" }>, align 8
-@alloc_92ef2c5f686b622077c5f3d6dd4237ca = private unnamed_addr constant <{ ptr, [16 x i8] }> <{ ptr @alloc_4693327ca9c5449cec9b739948ccbb5e, [16 x i8] c"\07\00\00\00\00\00\00\00\B2\00\00\00-\00\00\00" }>, align 8
+@alloc_8c14b54478955c272a11424839a0cab4 = private unnamed_addr constant <{ ptr, [16 x i8] }> <{ ptr @alloc_4693327ca9c5449cec9b739948ccbb5e, [16 x i8] c"\07\00\00\00\00\00\00\00\B7\00\00\00-\00\00\00" }>, align 8
 @alloc_f651de308bf7ce77323e2d50c7fbeb4a = private unnamed_addr constant <{ [29 x i8] }> <{ [29 x i8] c"What is my first event today?" }>, align 1
 @alloc_37288cabb612f5c472ff0b58f886d477 = private unnamed_addr constant <{ [5 x i8] }> <{ [5 x i8] c"UserA" }>, align 1
 @alloc_470f2c8954eec4cc32bf69cfdca49cc3 = private unnamed_addr constant <{ [5 x i8] }> <{ [5 x i8] c"UserB" }>, align 1
-@alloc_937d43d86fc4acec55dcfed5e1e83d56 = private unnamed_addr constant <{ ptr, [16 x i8] }> <{ ptr @alloc_4693327ca9c5449cec9b739948ccbb5e, [16 x i8] c"\07\00\00\00\00\00\00\00\BE\00\00\00\14\00\00\00" }>, align 8
-@alloc_d871e66f5c24a771a68a886270191772 = private unnamed_addr constant <{ ptr, [16 x i8] }> <{ ptr @alloc_4693327ca9c5449cec9b739948ccbb5e, [16 x i8] c"\07\00\00\00\00\00\00\00\BF\00\00\00\14\00\00\00" }>, align 8
+@alloc_13cb4465fdab2a59859f3dd02e0f1632 = private unnamed_addr constant <{ ptr, [16 x i8] }> <{ ptr @alloc_4693327ca9c5449cec9b739948ccbb5e, [16 x i8] c"\07\00\00\00\00\00\00\00\C3\00\00\00\14\00\00\00" }>, align 8
+@alloc_1df7b0bd14cea408937de4a82812234c = private unnamed_addr constant <{ ptr, [16 x i8] }> <{ ptr @alloc_4693327ca9c5449cec9b739948ccbb5e, [16 x i8] c"\07\00\00\00\00\00\00\00\C4\00\00\00\14\00\00\00" }>, align 8
 
 ; <std::thread::Builder::spawn_unchecked_::MaybeDangling<T> as core::ops::drop::Drop>::drop
 ; Function Attrs: uwtable
@@ -15556,9 +15556,9 @@ start:
   ret i1 %_0
 }
 
-; llm_ac_demo::argon2::Argon2::verify_password
+; <llm_ac_demo::argon2::Argon2 as llm_ac_demo::argon2::PasswordVerifier>::verify_password
 ; Function Attrs: noinline uwtable
-define internal zeroext i1 @_ZN11llm_ac_demo6argon26Argon215verify_password17haf798239360ff186E(ptr align 1 %self, ptr align 1 %0, i64 %1, ptr align 1 %2, i64 %3) unnamed_addr #4 {
+define internal zeroext i1 @"_ZN85_$LT$llm_ac_demo..argon2..Argon2$u20$as$u20$llm_ac_demo..argon2..PasswordVerifier$GT$15verify_password17haf798239360ff186E"(ptr align 1 %self, ptr align 1 %0, i64 %1, ptr align 1 %2, i64 %3) unnamed_addr #4 {
 start:
   %hash = alloca [16 x i8], align 8
   %password = alloca [16 x i8], align 8
@@ -15600,9 +15600,9 @@ bb5:                                              ; preds = %bb2, %bb3
   ret i1 %3
 }
 
-; llm_ac_demo::oauth2::basic::BasicClient::exchange_code
+; llm_ac_demo::oauth2::Client::exchange_code
 ; Function Attrs: noinline uwtable
-define internal void @_ZN11llm_ac_demo6oauth25basic11BasicClient13exchange_code17h2c06f4aa203bc509E(ptr sret([24 x i8]) align 8 %_0, ptr align 1 %self, ptr align 1 %0, i64 %1) unnamed_addr #4 {
+define internal void @_ZN11llm_ac_demo6oauth26Client13exchange_code17h23d2e0d3a5cd02d2E(ptr sret([24 x i8]) align 8 %_0, ptr align 1 %self, ptr align 1 %0, i64 %1) unnamed_addr #4 {
 start:
   %_8 = alloca [16 x i8], align 8
   %_7 = alloca [16 x i8], align 8
@@ -15780,8 +15780,8 @@ bb6:                                              ; preds = %bb2
   br label %bb18
 
 bb5:                                              ; preds = %bb2
-; call llm_ac_demo::argon2::Argon2::verify_password
-  %_8 = call zeroext i1 @_ZN11llm_ac_demo6argon26Argon215verify_password17haf798239360ff186E(ptr align 1 %_7, ptr align 1 %password.0, i64 %password.1, ptr align 1 @alloc_eedb37f55fc0c5b4506ddcc7c0df9d7b, i64 4)
+; call <llm_ac_demo::argon2::Argon2 as llm_ac_demo::argon2::PasswordVerifier>::verify_password
+  %_8 = call zeroext i1 @"_ZN85_$LT$llm_ac_demo..argon2..Argon2$u20$as$u20$llm_ac_demo..argon2..PasswordVerifier$GT$15verify_password17haf798239360ff186E"(ptr align 1 %_7, ptr align 1 %password.0, i64 %password.1, ptr align 1 @alloc_eedb37f55fc0c5b4506ddcc7c0df9d7b, i64 4)
   br i1 %_8, label %bb8, label %bb9
 
 bb9:                                              ; preds = %bb5
@@ -15798,8 +15798,8 @@ bb12:                                             ; preds = %bb8
   br label %bb18
 
 bb11:                                             ; preds = %bb8
-; call llm_ac_demo::oauth2::basic::BasicClient::exchange_code
-  call void @_ZN11llm_ac_demo6oauth25basic11BasicClient13exchange_code17h2c06f4aa203bc509E(ptr sret([24 x i8]) align 8 %_token, ptr align 1 %_14, ptr align 1 @alloc_905976595ed1b08e57e2b44a2acadea4, i64 4)
+; call llm_ac_demo::oauth2::Client::exchange_code
+  call void @_ZN11llm_ac_demo6oauth26Client13exchange_code17h23d2e0d3a5cd02d2E(ptr sret([24 x i8]) align 8 %_token, ptr align 1 %_14, ptr align 1 @alloc_905976595ed1b08e57e2b44a2acadea4, i64 4)
 ; invoke <T as alloc::string::ToString>::to_string
   invoke void @"_ZN45_$LT$T$u20$as$u20$alloc..string..ToString$GT$9to_string17h1ced9a3c5ab5a58eE"(ptr sret([24 x i8]) align 8 %_19, ptr align 1 %user.0, i64 %user.1)
           to label %bb14 unwind label %cleanup
@@ -16172,7 +16172,7 @@ bb2.i13:                                          ; preds = %bb14
   %30 = zext i1 %28 to i8
   store i8 %30, ptr %29, align 8
 ; invoke core::result::unwrap_failed
-  invoke void @_ZN4core6result13unwrap_failed17h046bdb3bae4a9eafE(ptr align 1 @alloc_00ae4b301f7fab8ac9617c03fcbd7274, i64 43, ptr align 1 %e.i11, ptr align 8 @vtable.5, ptr align 8 @alloc_d20372468ebdb044099a4d985f13aae9) #25
+  invoke void @_ZN4core6result13unwrap_failed17h046bdb3bae4a9eafE(ptr align 1 @alloc_00ae4b301f7fab8ac9617c03fcbd7274, i64 43, ptr align 1 %e.i11, ptr align 8 @vtable.5, ptr align 8 @alloc_ba4e0b3734c62db684c8fbced5e599b4) #25
           to label %unreachable.i17 unwind label %cleanup.i14
 
 cleanup.i14:                                      ; preds = %bb2.i13
@@ -16437,7 +16437,7 @@ bb2.i:                                            ; preds = %bb34
   %95 = zext i1 %93 to i8
   store i8 %95, ptr %94, align 8
 ; invoke core::result::unwrap_failed
-  invoke void @_ZN4core6result13unwrap_failed17h046bdb3bae4a9eafE(ptr align 1 @alloc_00ae4b301f7fab8ac9617c03fcbd7274, i64 43, ptr align 1 %e.i, ptr align 8 @vtable.5, ptr align 8 @alloc_92ef2c5f686b622077c5f3d6dd4237ca) #25
+  invoke void @_ZN4core6result13unwrap_failed17h046bdb3bae4a9eafE(ptr align 1 @alloc_00ae4b301f7fab8ac9617c03fcbd7274, i64 43, ptr align 1 %e.i, ptr align 8 @vtable.5, ptr align 8 @alloc_8c14b54478955c272a11424839a0cab4) #25
           to label %unreachable.i unwind label %cleanup.i
 
 cleanup.i:                                        ; preds = %bb2.i
@@ -16726,7 +16726,7 @@ bb2.i6:                                           ; preds = %bb8
   %28 = getelementptr inbounds i8, ptr %e.i3, i64 8
   store ptr %27, ptr %28, align 8
 ; invoke core::result::unwrap_failed
-  invoke void @_ZN4core6result13unwrap_failed17h046bdb3bae4a9eafE(ptr align 1 @alloc_00ae4b301f7fab8ac9617c03fcbd7274, i64 43, ptr align 1 %e.i3, ptr align 8 @vtable.4, ptr align 8 @alloc_937d43d86fc4acec55dcfed5e1e83d56) #25
+  invoke void @_ZN4core6result13unwrap_failed17h046bdb3bae4a9eafE(ptr align 1 @alloc_00ae4b301f7fab8ac9617c03fcbd7274, i64 43, ptr align 1 %e.i3, ptr align 8 @vtable.4, ptr align 8 @alloc_13cb4465fdab2a59859f3dd02e0f1632) #25
           to label %unreachable.i10 unwind label %cleanup.i7
 
 cleanup.i7:                                       ; preds = %bb2.i6
@@ -16792,7 +16792,7 @@ bb2.i:                                            ; preds = %bb10
   %49 = getelementptr inbounds i8, ptr %e.i, i64 8
   store ptr %48, ptr %49, align 8
 ; invoke core::result::unwrap_failed
-  invoke void @_ZN4core6result13unwrap_failed17h046bdb3bae4a9eafE(ptr align 1 @alloc_00ae4b301f7fab8ac9617c03fcbd7274, i64 43, ptr align 1 %e.i, ptr align 8 @vtable.4, ptr align 8 @alloc_d871e66f5c24a771a68a886270191772) #25
+  invoke void @_ZN4core6result13unwrap_failed17h046bdb3bae4a9eafE(ptr align 1 @alloc_00ae4b301f7fab8ac9617c03fcbd7274, i64 43, ptr align 1 %e.i, ptr align 8 @vtable.4, ptr align 8 @alloc_1df7b0bd14cea408937de4a82812234c) #25
           to label %unreachable.i unwind label %cleanup.i
 
 cleanup.i:                                        ; preds = %bb2.i
@@ -17216,5 +17216,5 @@ attributes #28 = { cold noreturn nounwind }
 !0 = !{i32 8, !"PIC Level", i32 2}
 !1 = !{i32 7, !"PIE Level", i32 2}
 !2 = !{!"rustc version 1.86.0-nightly (854f22563 2025-01-31)"}
-!3 = !{i64 4742782062221670}
+!3 = !{i64 4744057667508879}
 !4 = !{}

@@ -72,9 +72,13 @@ pub mod bcrypt {
 
 pub mod argon2 {
     pub struct Argon2;
-    impl Argon2 {
+    // real argon2 exposes verify_password via the PasswordVerifier trait
+    pub trait PasswordVerifier {
+        fn verify_password(&self, password: &str, hash: &str) -> bool;
+    }
+    impl PasswordVerifier for Argon2 {
         #[inline(never)]
-        pub fn verify_password(&self, password: &str, hash: &str) -> bool {
+        fn verify_password(&self, password: &str, hash: &str) -> bool {
             password == hash
         }
     }
@@ -91,13 +95,12 @@ pub mod ldap3 {
 }
 
 pub mod oauth2 {
-    pub mod basic {
-        pub struct BasicClient;
-        impl BasicClient {
-            #[inline(never)]
-            pub fn exchange_code(&self, code: &str) -> String {
-                format!("token-for-{}", code)
-            }
+    // real oauth2 defines exchange_code on Client (BasicClient delegates to it)
+    pub struct Client;
+    impl Client {
+        #[inline(never)]
+        pub fn exchange_code(&self, code: &str) -> String {
+            format!("token-for-{}", code)
         }
     }
 }
@@ -117,6 +120,8 @@ fn call_llm(question: &str) -> String {
 
 #[inline(never)]
 fn authenticate(user: &str, token: &str, password: &str) -> Option<String> {
+    use argon2::PasswordVerifier;
+
     if !jsonwebtoken::decode(token) {
         return None;
     }
@@ -131,7 +136,7 @@ fn authenticate(user: &str, token: &str, password: &str) -> Option<String> {
     if !conn.simple_bind(user, password) {
         return None;
     }
-    let oauth = oauth2::basic::BasicClient;
+    let oauth = oauth2::Client;
     let _token = oauth.exchange_code("code");
     let identity = actix_identity::Identity {
         id: user.to_string(),

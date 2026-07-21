@@ -118,11 +118,12 @@ pub fn match_callsite(
     llm: &[Signature],
     ac: &[Signature],
 ) -> Option<ContextPoint> {
-    let callee = normalize_callee(callee_mangled);
+    let demangled = format!("{:#}", demangle(&strip_symbol(callee_mangled)));
+    let candidates = candidate_paths(&demangled);
 
-    let (kind, (sig, strategy)) = if let Some(hit) = match_signature(&callee, llm) {
+    let (kind, (sig, strategy)) = if let Some(hit) = match_any(&candidates, llm) {
         (ContextKind::LLMAPICalls, hit)
-    } else if let Some(hit) = match_signature(&callee, ac) {
+    } else if let Some(hit) = match_any(&candidates, ac) {
         (ContextKind::AccessControl, hit)
     } else {
         return None;
@@ -132,7 +133,7 @@ pub fn match_callsite(
         kind,
         function: format!("{:#}", demangle(&strip_symbol(caller))),
         block: block.to_string(),
-        callee,
+        callee: demangled,
         matched_fn_name: sig.fn_name.clone(),
         category: sig.category.clone(),
         strategy,
@@ -151,11 +152,45 @@ fn callee_symbol(function: &Either<llvm_ir::instruction::InlineAssembly, Operand
     }
 }
 
-/// strip any symbol prefix, demangle, and drop the trailing hash and turbofish
-fn normalize_callee(mangled: &str) -> String {
-    let clean = strip_symbol(mangled);
-    let demangled = format!("{:#}", demangle(&clean));
-    strip_turbofish(&demangled)
+/// candidate paths to match a demangled callee against the catalogs. covers
+/// direct calls / inherent methods (with generics stripped) and, for trait
+/// dispatch `<Type as Trait>::method`, both `Type::method` and `Trait::method`.
+fn candidate_paths(demangled: &str) -> Vec<String> {
+    let mut out = vec![strip_turbofish(demangled)];
+
+    if let Some(gt) = matching_angle(demangled) {
+        let inner = &demangled[1..gt]; // "Type as Trait"
+        let rest = &demangled[gt + 1..]; // "::method..."
+        if let Some((ty, tr)) = inner.split_once(" as ") {
+            out.push(strip_turbofish(&format!("{}{}", ty, rest)));
+            out.push(strip_turbofish(&format!("{}{}", tr, rest)));
+        }
+    }
+
+    out
+}
+
+/// if `s` starts with '<', return the byte index of its matching '>'
+fn matching_angle(s: &str) -> Option<usize> {
+    if !s.starts_with('<') {
+        return None;
+    }
+
+    let mut depth = 0usize;
+    for (i, c) in s.char_indices() {
+        match c {
+            '<' => depth += 1,
+            '>' => {
+                depth -= 1;
+                if depth == 0 {
+                    return Some(i);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    None
 }
 
 fn strip_symbol(name: &str) -> String {
@@ -182,20 +217,25 @@ fn strip_turbofish(s: &str) -> String {
     out
 }
 
-/// suffix match (handles the crate prefix) first, then last-two-segment short-name
-fn match_signature<'a>(
-    callee: &str,
+/// try each candidate against the catalog: suffix match (handles the crate
+/// prefix) first across all candidates, then last-two-segment short-name
+fn match_any<'a>(
+    candidates: &[String],
     signatures: &'a [Signature],
 ) -> Option<(&'a Signature, &'static str)> {
-    for sig in signatures {
-        if callee == sig.fn_name || callee.ends_with(&format!("::{}", sig.fn_name)) {
-            return Some((sig, "suffix"));
+    for cand in candidates {
+        for sig in signatures {
+            if cand == &sig.fn_name || cand.ends_with(&format!("::{}", sig.fn_name)) {
+                return Some((sig, "suffix"));
+            }
         }
     }
 
-    for sig in signatures {
-        if last_two(callee) == last_two(&sig.fn_name) {
-            return Some((sig, "short-name"));
+    for cand in candidates {
+        for sig in signatures {
+            if last_two(cand) == last_two(&sig.fn_name) {
+                return Some((sig, "short-name"));
+            }
         }
     }
 
@@ -232,4 +272,61 @@ pub fn print_context_points(points: &[ContextPoint]) -> Result<(), Box<dyn Error
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn sig(fn_name: &str) -> Signature {
+        Signature {
+            fn_name: fn_name.to_string(),
+            category: None,
+        }
+    }
+
+    #[test]
+    fn trait_dispatch_yields_both_type_and_trait_paths() {
+        // real trait-method symbol demangles as `<Type as Trait>::method`
+        let demangled = "<app::argon2::Argon2 as app::argon2::PasswordVerifier>::verify_password";
+        let cands = candidate_paths(demangled);
+        assert!(
+            cands.iter().any(|c| c.ends_with("argon2::Argon2::verify_password")),
+            "{:?}",
+            cands
+        );
+        assert!(
+            cands
+                .iter()
+                .any(|c| c.ends_with("argon2::PasswordVerifier::verify_password")),
+            "{:?}",
+            cands
+        );
+    }
+
+    #[test]
+    fn matches_trait_method_against_trait_catalog_entry() {
+        let demangled = "<app::argon2::Argon2 as app::argon2::PasswordVerifier>::verify_password";
+        let cands = candidate_paths(demangled);
+        let ac = vec![sig("argon2::PasswordVerifier::verify_password")];
+        assert_eq!(
+            match_any(&cands, &ac).map(|(s, _)| s.fn_name.as_str()),
+            Some("argon2::PasswordVerifier::verify_password")
+        );
+    }
+
+    #[test]
+    fn matches_direct_call_and_strips_generics() {
+        // generics render as `Type<..>` in the demangled name
+        let cands = candidate_paths("app::oauth2::Client<Foo>::exchange_code");
+        let ac = vec![sig("oauth2::Client::exchange_code")];
+        assert!(match_any(&cands, &ac).is_some(), "{:?}", cands);
+    }
+
+    #[test]
+    fn does_not_match_unrelated_callee() {
+        let cands = candidate_paths("app::alloc::vec::Vec::push");
+        let ac = vec![sig("jsonwebtoken::decode")];
+        assert!(match_any(&cands, &ac).is_none());
+    }
 }
