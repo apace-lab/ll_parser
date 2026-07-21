@@ -11,8 +11,6 @@ use llvm_ir::{Constant, Module, Operand};
 use rustc_demangle::demangle;
 use std::collections::HashMap;
 use std::error::Error;
-use std::fs::File;
-use std::io::Write;
 use std::path::Path;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -36,6 +34,11 @@ pub struct ContextPoint {
     pub matched_fn_name: String,
     pub category: Option<String>,
     pub strategy: &'static str,
+    /// PAG node ids for this call's argument values (filled in by the pointer
+    /// analysis); their points-to sets are resolved after the fixed point
+    pub arg_nodes: Vec<usize>,
+    /// PAG node id for this call's result value, if any
+    pub result_node: Option<usize>,
 }
 
 /// load fn_name signatures from an AFG catalog json, skipping the _schema_notes key
@@ -137,6 +140,8 @@ pub fn match_callsite(
         matched_fn_name: sig.fn_name.clone(),
         category: sig.category.clone(),
         strategy,
+        arg_nodes: Vec::new(),
+        result_node: None,
     })
 }
 
@@ -268,31 +273,6 @@ fn last_two(path: &str) -> &str {
         Some((idx, _)) => &path[idx + 2..],
         None => path,
     }
-}
-
-pub fn print_context_points(points: &[ContextPoint]) -> Result<(), Box<dyn Error>> {
-    let mut file = File::create("context_points.txt")?;
-
-    writeln!(file, "=== Context Points ===")?;
-    writeln!(file, "total: {}", points.len())?;
-    writeln!(file)?;
-
-    for point in points {
-        let kind = match point.kind {
-            ContextKind::LLMAPICalls => "LLM_API",
-            ContextKind::AccessControl => "ACCESS_CONTROL",
-        };
-
-        let category = point.category.as_deref().unwrap_or("-");
-
-        writeln!(
-            file,
-            "  [{}] {} in {}::{}  (matched {} / {} / {})",
-            kind, point.callee, point.function, point.block, point.matched_fn_name, category, point.strategy
-        )?;
-    }
-
-    Ok(())
 }
 
 #[cfg(test)]

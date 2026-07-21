@@ -77,7 +77,9 @@ when `--api=` and `--ac=` are both given (see flags above), the analysis also
 locates llm api and access-control call sites: we match the demangled callee
 against the `fn_name`s in `signatures/llm_api_functions.json` and
 `signatures/ac_functions.json` (suffix match, then last-two-segment short-name).
-results go to `context_points.txt`.
+results go to `context_points.txt` and each matched call site is listed with the
+points-to sets of its argument and result values (resolved after the fixed
+point), so context is tied back into the pointer analysis.
 
 `examples/llm_ac_demo/` is a small self-contained fixture: the two-user
 shared-cache demo plus stubbed llm calls (async-openai, ollama) and
