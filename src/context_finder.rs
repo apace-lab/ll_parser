@@ -161,13 +161,34 @@ fn candidate_paths(demangled: &str) -> Vec<String> {
     if let Some(gt) = matching_angle(demangled) {
         let inner = &demangled[1..gt]; // "Type as Trait"
         let rest = &demangled[gt + 1..]; // "::method..."
-        if let Some((ty, tr)) = inner.split_once(" as ") {
+        if let Some((ty, tr)) = split_as_top_level(inner) {
             out.push(strip_turbofish(&format!("{}{}", ty, rest)));
             out.push(strip_turbofish(&format!("{}{}", tr, rest)));
         }
     }
 
     out
+}
+
+/// split `Type as Trait` at the top-level ` as ` (ignoring any inside nested `<...>`)
+fn split_as_top_level(inner: &str) -> Option<(&str, &str)> {
+    let bytes = inner.as_bytes();
+    let mut depth = 0i32;
+    let mut i = 0;
+
+    while i < bytes.len() {
+        match bytes[i] {
+            b'<' => depth += 1,
+            b'>' => depth -= 1,
+            b' ' if depth == 0 && inner[i..].starts_with(" as ") => {
+                return Some((&inner[..i], &inner[i + 4..]));
+            }
+            _ => {}
+        }
+        i += 1;
+    }
+
+    None
 }
 
 /// if `s` starts with '<', return the byte index of its matching '>'
@@ -285,48 +306,140 @@ mod tests {
         }
     }
 
+    /// does any candidate for `demangled` match a catalog of just `fn_name`?
+    fn matches(demangled: &str, fn_name: &str) -> bool {
+        match_any(&candidate_paths(demangled), &[sig(fn_name)]).is_some()
+    }
+
+    // ---- direct calls / inherent methods ----
+
+    #[test]
+    fn direct_free_function() {
+        assert!(matches("app::bcrypt::verify", "bcrypt::verify"));
+    }
+
+    #[test]
+    fn inherent_method() {
+        assert!(matches(
+            "app::ldap3::LdapConn::simple_bind",
+            "ldap3::LdapConn::simple_bind"
+        ));
+    }
+
+    #[test]
+    fn strips_generics_on_type() {
+        assert!(matches(
+            "app::oauth2::Client<Config>::exchange_code",
+            "oauth2::Client::exchange_code"
+        ));
+    }
+
+    #[test]
+    fn strips_method_level_generics() {
+        assert!(matches("app::foo::Bar::baz<i32>", "foo::Bar::baz"));
+    }
+
+    // ---- trait dispatch `<Type as Trait>::method` ----
+
     #[test]
     fn trait_dispatch_yields_both_type_and_trait_paths() {
-        // real trait-method symbol demangles as `<Type as Trait>::method`
-        let demangled = "<app::argon2::Argon2 as app::argon2::PasswordVerifier>::verify_password";
-        let cands = candidate_paths(demangled);
+        let cands = candidate_paths(
+            "<app::argon2::Argon2 as app::argon2::PasswordVerifier>::verify_password",
+        );
         assert!(
             cands.iter().any(|c| c.ends_with("argon2::Argon2::verify_password")),
             "{:?}",
             cands
         );
         assert!(
-            cands
-                .iter()
-                .any(|c| c.ends_with("argon2::PasswordVerifier::verify_password")),
+            cands.iter().any(|c| c.ends_with("argon2::PasswordVerifier::verify_password")),
             "{:?}",
             cands
         );
     }
 
     #[test]
-    fn matches_trait_method_against_trait_catalog_entry() {
-        let demangled = "<app::argon2::Argon2 as app::argon2::PasswordVerifier>::verify_password";
-        let cands = candidate_paths(demangled);
-        let ac = vec![sig("argon2::PasswordVerifier::verify_password")];
-        assert_eq!(
-            match_any(&cands, &ac).map(|(s, _)| s.fn_name.as_str()),
-            Some("argon2::PasswordVerifier::verify_password")
+    fn trait_dispatch_matches_trait_entry() {
+        assert!(matches(
+            "<app::argon2::Argon2 as app::argon2::PasswordVerifier>::verify_password",
+            "argon2::PasswordVerifier::verify_password"
+        ));
+    }
+
+    #[test]
+    fn trait_dispatch_matches_type_entry() {
+        // catalog entry keyed on the concrete type instead of the trait
+        assert!(matches(
+            "<app::casbin::Enforcer as app::casbin::CoreApi>::enforce",
+            "casbin::Enforcer::enforce"
+        ));
+        // and on the trait (how our catalog actually keys casbin)
+        assert!(matches(
+            "<app::casbin::Enforcer as app::casbin::CoreApi>::enforce",
+            "casbin::CoreApi::enforce"
+        ));
+    }
+
+    // ---- nesting / generics on both sides ----
+
+    #[test]
+    fn nested_generics_on_type() {
+        assert!(matches(
+            "<app::Foo<app::Bar<i32>> as app::Trait>::method",
+            "Trait::method"
+        ));
+        assert!(matches(
+            "<app::Foo<app::Bar<i32>> as app::Trait>::method",
+            "Foo::method"
+        ));
+    }
+
+    #[test]
+    fn generics_on_both_type_and_trait() {
+        assert!(matches(
+            "<app::Client<Config> as app::TokenExchange<Foo>>::exchange_code",
+            "TokenExchange::exchange_code"
+        ));
+        assert!(matches(
+            "<app::Client<Config> as app::TokenExchange<Foo>>::exchange_code",
+            "Client::exchange_code"
+        ));
+    }
+
+    #[test]
+    fn nested_trait_projection_splits_at_outer_as() {
+        // `<<T as A>::B as C>::method` must split at the OUTER ` as ` (C), not A
+        let cands =
+            candidate_paths("<<app::T as app::A>::B as app::C>::method");
+        assert!(
+            cands.iter().any(|c| c.ends_with("app::C::method")),
+            "{:?}",
+            cands
+        );
+        // must NOT wrongly treat A as the trait
+        assert!(
+            !cands.iter().any(|c| c.ends_with("app::A::method")),
+            "{:?}",
+            cands
         );
     }
 
+    // ---- negatives ----
+
     #[test]
-    fn matches_direct_call_and_strips_generics() {
-        // generics render as `Type<..>` in the demangled name
-        let cands = candidate_paths("app::oauth2::Client<Foo>::exchange_code");
-        let ac = vec![sig("oauth2::Client::exchange_code")];
-        assert!(match_any(&cands, &ac).is_some(), "{:?}", cands);
+    fn no_match_for_unrelated_callee() {
+        assert!(!matches("app::alloc::vec::Vec::push", "jsonwebtoken::decode"));
     }
 
     #[test]
-    fn does_not_match_unrelated_callee() {
-        let cands = candidate_paths("app::alloc::vec::Vec::push");
-        let ac = vec![sig("jsonwebtoken::decode")];
-        assert!(match_any(&cands, &ac).is_none());
+    fn no_match_on_partial_segment() {
+        // `decode_header` must not match a `decode` entry (segment boundary)
+        assert!(!matches("app::jsonwebtoken::decode_header", "jsonwebtoken::decode"));
+    }
+
+    #[test]
+    fn matching_angle_requires_leading_bracket() {
+        assert_eq!(matching_angle("app::foo::bar"), None);
+        assert!(matching_angle("<a as b>::c").is_some());
     }
 }
