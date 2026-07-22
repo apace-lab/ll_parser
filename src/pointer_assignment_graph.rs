@@ -131,8 +131,14 @@ impl<'m> PANodeKind<'m> {
         match self {
             Self::ValueName { function, name } => return format!("ssa::{}::{}", function, name),
             Self::Operand { function, op } => {
-                // TODO: ?? make LocalOperand use the same key as ValueName, so that we can alias <ptr %x> with <ptr %x { addr_space: 0 }>
+                // alias a LocalOperand use `%x` with its ValueName def: key on the
+                // name only, dropping the operand's type/addr_space (which the
+                // operand's Display would otherwise include), so `<ptr %x>` and
+                // `%x` map to the same node. `function` is Some iff LocalOperand.
                 if let Some(function) = function {
+                    if let Operand::LocalOperand { name, .. } = op {
+                        return format!("ssa::{}::{}", function, name);
+                    }
                     return format!("ssa::{}::{}", function, op);
                 } else {
                     return format!("operand::{:?}", op);
@@ -335,6 +341,10 @@ pub struct PointerAssignmentGraph<'m> {
 
     pub edges: Vec<PAEdge>,
 
+    /// (src, dst, kind) of every edge in `edges`, for O(log n) duplicate checks
+    /// instead of an O(E) linear scan over `edges` on each insertion
+    pub edge_index: BTreeSet<(PANodeId, PANodeId, PAEdgeKind)>,
+
     /// callsite id -> PACallSite
     pub callsites: BTreeMap<usize, PACallSite<'m>>,
     next_callsite_id: usize,
@@ -382,6 +392,12 @@ pub struct PointerAssignmentGraph<'m> {
 
     /// record call sites matched against the catalogs context_signatures
     pub context_points: Vec<ContextPoint>,
+
+    /// crate name of the entry (main) module; used for selective context: only
+    /// application functions carry a call context, library/runtime plumbing
+    /// (std/core/alloc/tokio/...) stays context-insensitive (Global) to avoid
+    /// the (function, context) instantiation blow-up. empty => gate disabled.
+    pub app_crate: String,
 }
 
 impl<'m> PointerAssignmentGraph<'m> {
@@ -451,6 +467,7 @@ impl<'m> PointerAssignmentGraph<'m> {
             vtable2function: global_function_refs,
             call_graph: cg,
             edges: Vec::new(),
+            edge_index: BTreeSet::new(),
             callsites: BTreeMap::new(),
             next_callsite_id: 0,
             nodes: HashMap::new(),
@@ -467,10 +484,13 @@ impl<'m> PointerAssignmentGraph<'m> {
             config: config,
             context_signatures: context_signatures,
             context_points: Vec::new(),
+            app_crate: String::new(),
         };
 
         if let Some(main_name) = pag.find_main_function_name() {
             println!("[PAG] potential main function: {}", main_name);
+            pag.app_crate = parse_app_crate(&main_name);
+            println!("[PAG] selective context app crate: {:?}", pag.app_crate);
             pag.pending_functions
                 .push_back((main_name, PAContext::global()));
         } else {
@@ -1505,7 +1525,7 @@ impl<'m> PointerAssignmentGraph<'m> {
     /// if not, update lhs2edges and add to worklist
     /// NOTE: this is for adding initial edge (before any propogation)
     fn insert_edge(&mut self, edge: PAEdge) {
-        if self.edges.iter().any(|e| same_edge(e, &edge)) {
+        if self.edge_index.contains(&(edge.src, edge.dst, edge.kind.clone())) {
             return;
         }
 
@@ -1539,6 +1559,8 @@ impl<'m> PointerAssignmentGraph<'m> {
         }
 
         self.edges.push(edge.clone());
+        self.edge_index
+            .insert((edge.src, edge.dst, edge.kind.clone()));
 
         // Also seed it into the worklist.
         self.enqueue_initial_edge(edge);
@@ -1815,6 +1837,11 @@ impl<'m> PointerAssignmentGraph<'m> {
         // 1. Direct call: make sure call graph has caller -> callee.
         // ------------------------------------------------------------
         if let Some(direct_callee_name) = direct_callee_name {
+            // selective context: library/runtime callees stay Global so they are
+            // visited once, not re-instantiated under every caller context
+            let callee_context =
+                self.selective_callee_context(&direct_callee_name, callee_context);
+
             // record a context point if this reachable call site matches a catalog
             let point = if let Some((llm, ac)) = self.context_signatures.as_ref() {
                 crate::context_finder::match_callsite(
@@ -1990,7 +2017,7 @@ impl<'m> PointerAssignmentGraph<'m> {
 
     fn get_callee_context_from_callsite(
         &self,
-        _callee_name: &str,
+        callee_name: &str,
         callsite: &PACallSite<'m>,
     ) -> PAContext {
         let elem = PAContextElem::CallSite {
@@ -1999,7 +2026,25 @@ impl<'m> PointerAssignmentGraph<'m> {
             callsite_id: callsite.id,
         };
 
-        callsite.context.push_with_config(elem, &self.config)
+        let computed = callsite.context.push_with_config(elem, &self.config);
+        self.selective_callee_context(callee_name, computed)
+    }
+
+    /// selective context policy: only application (app_crate) functions carry a
+    /// call context; library/runtime plumbing stays Global. this bounds the
+    /// (function, context) instantiation blow-up (std/core/tokio would otherwise
+    /// be re-analyzed under every distinct caller context) while keeping context
+    /// where per-user precision actually matters. no-op when app_crate is empty.
+    fn selective_callee_context(&self, callee_name: &str, computed: PAContext) -> PAContext {
+        if self.app_crate.is_empty() || self.context_relevant(callee_name) {
+            computed
+        } else {
+            PAContext::global()
+        }
+    }
+
+    fn context_relevant(&self, function_name: &str) -> bool {
+        function_name.contains(&self.app_crate)
     }
 
     fn add_constraints_for_call(
@@ -2428,13 +2473,15 @@ impl<'m> PointerAssignmentGraph<'m> {
                 block: edge.block.clone(),
             };
 
-            if self.edges.iter().any(|e| same_edge(e, &edge)) {
+            if self.edge_index.contains(&(edge.src, edge.dst, edge.kind.clone())) {
                 continue;
             }
 
             // insert dynamic copy edge
             self.lhs2edges.entry(src).or_default().push(edge.clone());
             self.edges.push(edge.clone());
+            self.edge_index
+                .insert((edge.src, edge.dst, edge.kind.clone()));
 
             let seed_delta = self.points_to_snapshot(src);
             if !seed_delta.is_empty() {
@@ -2480,12 +2527,14 @@ impl<'m> PointerAssignmentGraph<'m> {
                 block: edge.block.clone(),
             };
 
-            if self.edges.iter().any(|e| same_edge(e, &edge)) {
+            if self.edge_index.contains(&(edge.src, edge.dst, edge.kind.clone())) {
                 continue;
             }
 
             self.lhs2edges.entry(*obj).or_default().push(edge.clone());
             self.edges.push(edge.clone());
+            self.edge_index
+                .insert((edge.src, edge.dst, edge.kind.clone()));
 
             let seed_delta = self.points_to_snapshot(*obj);
             if !seed_delta.is_empty() {
@@ -3770,6 +3819,28 @@ fn normalize_function_name(name: &str) -> &str {
     name.trim_start_matches('%')
         .trim_start_matches('@')
         .trim_matches('"')
+}
+
+/// parse the crate name from a Rust legacy-mangled symbol: `_ZN<len><crate>...`.
+/// e.g. `_ZN11llm_ac_demo4main17h..E` -> `llm_ac_demo`. returns "" if it does not
+/// look like a `_ZN`-mangled symbol (selective-context gate then disables).
+fn parse_app_crate(mangled: &str) -> String {
+    let s = normalize_function_name(mangled).trim_start_matches('_');
+    let Some(rest) = s.strip_prefix("ZN") else {
+        return String::new();
+    };
+
+    let digits: String = rest.chars().take_while(|c| c.is_ascii_digit()).collect();
+    let Ok(len) = digits.parse::<usize>() else {
+        return String::new();
+    };
+
+    let after = &rest[digits.len()..];
+    if after.len() >= len {
+        after[..len].to_string()
+    } else {
+        String::new()
+    }
 }
 
 /// compute indices for insertvalue/extractvalue (constant struct indices)
