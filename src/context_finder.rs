@@ -136,7 +136,7 @@ pub fn match_callsite(
         kind,
         function: format!("{:#}", demangle(&strip_symbol(caller))),
         block: block.to_string(),
-        callee: demangled,
+        callee: demangled.to_string(),
         matched_fn_name: sig.fn_name.clone(),
         category: sig.category.clone(),
         strategy,
@@ -146,7 +146,9 @@ pub fn match_callsite(
 }
 
 /// the callee symbol of a call/invoke, if it is a direct global reference
-fn callee_symbol(function: &Either<llvm_ir::instruction::InlineAssembly, Operand>) -> Option<String> {
+fn callee_symbol(
+    function: &Either<llvm_ir::instruction::InlineAssembly, Operand>,
+) -> Option<String> {
     let Either::Right(Operand::ConstantOperand(constant)) = function else {
         return None;
     };
@@ -327,12 +329,16 @@ mod tests {
             "<app::argon2::Argon2 as app::argon2::PasswordVerifier>::verify_password",
         );
         assert!(
-            cands.iter().any(|c| c.ends_with("argon2::Argon2::verify_password")),
+            cands
+                .iter()
+                .any(|c| c.ends_with("argon2::Argon2::verify_password")),
             "{:?}",
             cands
         );
         assert!(
-            cands.iter().any(|c| c.ends_with("argon2::PasswordVerifier::verify_password")),
+            cands
+                .iter()
+                .any(|c| c.ends_with("argon2::PasswordVerifier::verify_password")),
             "{:?}",
             cands
         );
@@ -389,8 +395,7 @@ mod tests {
     #[test]
     fn nested_trait_projection_splits_at_outer_as() {
         // `<<T as A>::B as C>::method` must split at the OUTER ` as ` (C), not A
-        let cands =
-            candidate_paths("<<app::T as app::A>::B as app::C>::method");
+        let cands = candidate_paths("<<app::T as app::A>::B as app::C>::method");
         assert!(
             cands.iter().any(|c| c.ends_with("app::C::method")),
             "{:?}",
@@ -408,13 +413,19 @@ mod tests {
 
     #[test]
     fn no_match_for_unrelated_callee() {
-        assert!(!matches("app::alloc::vec::Vec::push", "jsonwebtoken::decode"));
+        assert!(!matches(
+            "app::alloc::vec::Vec::push",
+            "jsonwebtoken::decode"
+        ));
     }
 
     #[test]
     fn no_match_on_partial_segment() {
         // `decode_header` must not match a `decode` entry (segment boundary)
-        assert!(!matches("app::jsonwebtoken::decode_header", "jsonwebtoken::decode"));
+        assert!(!matches(
+            "app::jsonwebtoken::decode_header",
+            "jsonwebtoken::decode"
+        ));
     }
 
     #[test]

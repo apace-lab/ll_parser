@@ -5,6 +5,7 @@
 //! see the [crate's README](https://github.com/cdisselkoen/llvm-ir-analysis/blob/main/README.md).
 
 mod call_graph;
+mod context;
 pub mod context_finder;
 mod control_dep_graph;
 mod control_flow_graph;
@@ -41,7 +42,10 @@ pub struct ModuleAnalysis<'m> {
     /// Map from function name to the `FunctionAnalysis` for that function
     fn_analyses: HashMap<&'m str, FunctionAnalysis<'m>>,
     /// optional (llm, access-control) catalogs used to record context points
-    context_catalogs: Option<(Vec<context_finder::Signature>, Vec<context_finder::Signature>)>,
+    context_catalogs: Option<(
+        Vec<context_finder::Signature>,
+        Vec<context_finder::Signature>,
+    )>,
 }
 
 impl<'m> ModuleAnalysis<'m> {
@@ -136,7 +140,10 @@ pub struct CrossModuleAnalysis<'m> {
     /// Map from module name to the `ModuleAnalysis` for that module
     module_analyses: HashMap<&'m str, ModuleAnalysis<'m>>,
     /// optional (llm, access-control) catalogs used to record context points
-    context_catalogs: Option<(Vec<context_finder::Signature>, Vec<context_finder::Signature>)>,
+    context_catalogs: Option<(
+        Vec<context_finder::Signature>,
+        Vec<context_finder::Signature>,
+    )>,
 }
 
 impl<'m> CrossModuleAnalysis<'m> {
