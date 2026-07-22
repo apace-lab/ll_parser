@@ -11,8 +11,8 @@ use std::collections::{BTreeMap, BTreeSet, HashMap, VecDeque};
 use std::error::Error;
 use std::fs::File;
 use std::io::Write;
-use std::println;
 use std::time::Instant;
+use std::{panic, println};
 
 /// field-sensitive: to avoid circular dependency in gep, where %x = gep(%a, ...), then %a = %x
 /// then there will be infinite fieldobject created in this loop
@@ -376,19 +376,7 @@ pub struct PointerAssignmentGraph<'m> {
     /// node id -> MemCopy edges where this node is edge.dst, i.e., dst pointer -> memcopy edges
     pub memcpy_dst_edges: BTreeMap<PANodeId, Vec<PAEdge>>,
 
-    /// true when we do on-the-fly to compute reachable functions
-    pub on_the_fly: bool,
-
-    /// true when skip the analysis on basicblocks with "cleanup" and their successors
-    /// these are mostly unwind paths, panic cleanup, and destructor paths.
-    /// our goal is normal execution pointer flow rather than unwind/destructor behavior.
-    pub skip_cleanup_blocks: bool,
-
     pub config: PAConfig,
-
-    /// (llm, access-control) catalogs; when set, matched call sites are recorded
-    /// as context points while the analysis visits calls
-    pub context_signatures: Option<(Vec<Signature>, Vec<Signature>)>,
 
     /// record call sites matched against the catalogs context_signatures
     pub context_points: Vec<ContextPoint>,
@@ -404,6 +392,8 @@ impl<'m> PointerAssignmentGraph<'m> {
     pub fn new(
         modules: impl IntoIterator<Item = &'m Module>,
         functions_by_type: &FunctionsByType<'m>,
+        mode: &str,
+        k: Option<usize>,
         context_signatures: Option<(Vec<Signature>, Vec<Signature>)>,
     ) -> Self {
         let start_time: Instant = Instant::now();
@@ -448,14 +438,14 @@ impl<'m> PointerAssignmentGraph<'m> {
         }
 
         let (global_function_refs, function_referrers) = collect_vtable_functions(&modules);
-        let config = PAConfig {
-            context_mode: PAContextMode::KCallSite,
-            context_k: 1,
+        let config = match mode {
+            "insensitive" => PAConfig::insensitive(),
+            "kcfa" => PAConfig::k_callsite(k.unwrap()),
+            "kobj" => PAConfig::k_object(k.unwrap()),
+            "kmix" => PAConfig::k_mixed(k.unwrap()),
+            "afg" => PAConfig::afg(context_signatures),
+            _ => panic!("no such config."),
         };
-        // let config = PAConfig {
-        //     context_mode: PAContextMode::Insensitive,
-        //     context_k: 1,
-        // };
 
         let mut pag = Self {
             modules: modules.clone(),
@@ -479,10 +469,7 @@ impl<'m> PointerAssignmentGraph<'m> {
             lhs2edges: BTreeMap::new(),
             store_dst_edges: BTreeMap::new(),
             memcpy_dst_edges: BTreeMap::new(),
-            on_the_fly: true, //TODO: pass in ?
-            skip_cleanup_blocks: true,
             config: config,
-            context_signatures: context_signatures,
             context_points: Vec::new(),
             app_crate: String::new(),
         };
@@ -500,7 +487,7 @@ impl<'m> PointerAssignmentGraph<'m> {
 
         println!(
             "[PAG] config: context mode = {:?} with k = {}",
-            pag.config.context_mode, pag.config.context_k
+            pag.config.context_mode, pag.config.default_k
         );
 
         // discover new constraints and solve until fixed point
@@ -1525,7 +1512,10 @@ impl<'m> PointerAssignmentGraph<'m> {
     /// if not, update lhs2edges and add to worklist
     /// NOTE: this is for adding initial edge (before any propogation)
     fn insert_edge(&mut self, edge: PAEdge) {
-        if self.edge_index.contains(&(edge.src, edge.dst, edge.kind.clone())) {
+        if self
+            .edge_index
+            .contains(&(edge.src, edge.dst, edge.kind.clone()))
+        {
             return;
         }
 
@@ -1839,11 +1829,10 @@ impl<'m> PointerAssignmentGraph<'m> {
         if let Some(direct_callee_name) = direct_callee_name {
             // selective context: library/runtime callees stay Global so they are
             // visited once, not re-instantiated under every caller context
-            let callee_context =
-                self.selective_callee_context(&direct_callee_name, callee_context);
+            let callee_context = self.selective_callee_context(&direct_callee_name, callee_context);
 
             // record a context point if this reachable call site matches a catalog
-            let point = if let Some((llm, ac)) = self.context_signatures.as_ref() {
+            let point = if let Some((llm, ac)) = self.config.context_signatures.as_ref() {
                 crate::context_finder::match_callsite(
                     &direct_callee_name,
                     caller_name,
@@ -1973,7 +1962,7 @@ impl<'m> PointerAssignmentGraph<'m> {
         }
 
         // the following too conservative and expensive. skip
-        if !self.on_the_fly {
+        if !self.config.on_the_fly {
             // ------------------------------------------------------------
             // 4. Also add edges for callees already known by call graph.
             // ------------------------------------------------------------
@@ -2036,11 +2025,26 @@ impl<'m> PointerAssignmentGraph<'m> {
     /// be re-analyzed under every distinct caller context) while keeping context
     /// where per-user precision actually matters. no-op when app_crate is empty.
     fn selective_callee_context(&self, callee_name: &str, computed: PAContext) -> PAContext {
-        if self.app_crate.is_empty() || self.context_relevant(callee_name) {
-            computed
-        } else {
-            PAContext::global()
+        if self.config.app_only {
+            if self.app_crate.is_empty() || self.context_relevant(callee_name) {
+                debug!(
+                    "[PAG] selective context (app-only): function {} -> context {:?}",
+                    callee_name, computed
+                );
+
+                return computed;
+            } else {
+                debug!(
+                    "[PAG] selective global context for function {}",
+                    callee_name
+                );
+
+                return PAContext::global();
+            }
+        } else if self.config.afg_special {
         }
+
+        PAContext::global()
     }
 
     fn context_relevant(&self, function_name: &str) -> bool {
@@ -2162,7 +2166,7 @@ impl<'m> PointerAssignmentGraph<'m> {
         let mut iteration = 0usize;
 
         loop {
-            if self.on_the_fly {
+            if self.config.on_the_fly {
                 self.discover_reachable_constraints();
             }
 
@@ -2473,7 +2477,10 @@ impl<'m> PointerAssignmentGraph<'m> {
                 block: edge.block.clone(),
             };
 
-            if self.edge_index.contains(&(edge.src, edge.dst, edge.kind.clone())) {
+            if self
+                .edge_index
+                .contains(&(edge.src, edge.dst, edge.kind.clone()))
+            {
                 continue;
             }
 
@@ -2527,7 +2534,10 @@ impl<'m> PointerAssignmentGraph<'m> {
                 block: edge.block.clone(),
             };
 
-            if self.edge_index.contains(&(edge.src, edge.dst, edge.kind.clone())) {
+            if self
+                .edge_index
+                .contains(&(edge.src, edge.dst, edge.kind.clone()))
+            {
                 continue;
             }
 
@@ -3291,7 +3301,7 @@ impl<'m> PointerAssignmentGraph<'m> {
 
     /// print the PAG to a file
     pub fn print_pointer_assignment_graph(&self) -> Result<(), Box<dyn Error>> {
-        if self.on_the_fly {
+        if self.config.on_the_fly {
             self.call_graph.print_call_graph()?;
             println!("Wrote call graph to cg.txt");
         }
@@ -3363,7 +3373,7 @@ impl<'m> PointerAssignmentGraph<'m> {
         self.print_edge_kind_statistics();
         // self.print_vtable_function_refs();
 
-        if self.context_signatures.is_some() {
+        if self.config.context_signatures.is_some() {
             let _ = self.print_context_points();
             println!("=== Context Statistics ===");
             println!("context points: {}", self.context_points().len());

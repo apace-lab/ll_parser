@@ -60,14 +60,16 @@ with the following flags:
 --info: print parsed module info to parsed_modul.txt
 --cfg: print fg for each function in a module to cfg.txt (default from llvm-ir)
 --cg: print cg for a module to cg.txt (default from llvm-ir)
---pag: print points-to constraints to pag.txt, points-to sets to points_to.txt and statistics to console
+--pag=: print points-to constraints to pag.txt, points-to sets to points_to.txt and statistics to console
+      mode can be insensitive, kcfa, kobj, kmix, afg
+      with --k=: the max length of context 
 --api=signatures/llm_api_functions.json: load signatures for LLM API calls from our catalogs; if provided, will be used as context for pag
 --ac=signatures/ac_functions.json: load signatures for access controls from our catalogs; if provided, will be used as context for pag
 ```
 
 example command:
 ```bash
-cargo run -- examples/llm_ac_demo/llm_ac_demo.ll --pag --api=signatures/llm_api_functions.json --ac=signatures/ac_functions.json
+cargo run -- examples/llm_ac_demo/llm_ac_demo.ll --pag=afg --api=signatures/llm_api_functions.json --ac=signatures/ac_functions.json
 ```
 
 
@@ -90,6 +92,69 @@ with an llvm-19 rustc:
 cd examples/llm_ac_demo/
 rustc main.rs --crate-name llm_ac_demo --emit=llvm-ir -o llm_ac_demo.ll
 ```
+
+
+
+## how to run on `lencx/ChatGPT`
+gitclone `lencx/ChatGPT`:
+```bash
+git clone https://github.com/lencx/ChatGPT.git
+```
+
+build `lencx/ChatGPT` to LLVM IR:
+```bash
+cd ChatGPT/src-tauri && \
+rustup run nightly-2025-02-01 cargo rustc --bin chatgpt --release -- -C codegen-units=1 --emit=llvm-ir=/tmp/chatgpt_lencx.ll
+```
+
+Run `ll_parser` on it:
+```bash
+cd <ll_parser>
+RUSTFLAGS=-Awarnings cargo run -q --release -- /tmp/chatgpt_lencx.ll --pag \
+  --api=signatures/llm_api_functions.json \
+  --ac=signatures/ac_functions.json
+```
+
+
+
+### issues when compiling ...
+```bash
+error: failed to run custom build command for `openssl-sys v0.9.87`
+...
+run pkg_config fail: Could not run `PKG_CONFIG_ALLOW_SYSTEM_CFLAGS="1" "pkg-config" "--libs" "--cflags" "openssl"`
+  The pkg-config command could not be found.
+
+  Most likely, you need to install a pkg-config package for your OS.
+```
+
+```bash
+The following warnings were emitted during compilation:
+
+warning: javascriptcore-rs-sys@0.4.0: `PKG_CONFIG_ALLOW_SYSTEM_CFLAGS="1" "pkg-config" "--libs" "--cflags" "javascriptcoregtk-4.0" "javascriptcoregtk-4.0 >= 2.24"` did not exit successfully: exit status: 1
+
+error: failed to run custom build command for `javascriptcore-rs-sys v0.4.0`
+...
+Package javascriptcoregtk-4.0 was not found in the pkg-config search path.
+  Perhaps you should add the directory containing `javascriptcoregtk-4.0.pc'
+  to the PKG_CONFIG_PATH environment variable
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 ## issues you may see

@@ -181,9 +181,30 @@ fn main() -> Result<(), Box<dyn Error>> {
     }
 
     // generate pag (records context points during the analysis if catalogs were set)
-    if has_flag(&args, "--pag") {
-        let pag = analysis.pointer_assignment_graph();
-        pag.print_pointer_assignment_graph()?;
+    if let Some(mode) = get_flag_value(&args, "--pag=") {
+        let k = get_flag_value(&args, "--k=");
+        if mode == "kcfa" || mode == "kobj" || mode == "kmix" {
+            // Use k here
+            if k.is_none() {
+                eprintln!("PAG mode {} requires --k=<number>", mode);
+                std::process::exit(1);
+            }
+
+            let k_size: Option<usize> = k.map(|value| {
+                value
+                    .parse::<usize>()
+                    .expect("--k must be a non-negative integer")
+            });
+
+            let pag: std::cell::Ref<'_, ll_parser::PointerAssignmentGraph<'_>> =
+                analysis.pointer_assignment_graph(mode, k_size);
+            pag.print_pointer_assignment_graph()?;
+        } else {
+            let pag: std::cell::Ref<'_, ll_parser::PointerAssignmentGraph<'_>> =
+                analysis.pointer_assignment_graph(mode, None);
+            pag.print_pointer_assignment_graph()?;
+        }
+
         println!("Wrote pointer assignment graph to pag.txt");
     }
 

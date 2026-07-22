@@ -1,3 +1,5 @@
+use crate::context_finder::Signature;
+
 /// our context-sensitive can be:
 ///     k-callsite only
 ///     k-object only
@@ -72,7 +74,7 @@ impl PAContext {
     }
 
     pub fn filtered_for_mode(&self, config: &PAConfig) -> Self {
-        if config.context_mode == PAContextMode::Insensitive || config.context_k == 0 {
+        if config.context_mode == PAContextMode::Insensitive || config.default_k == 0 {
             return PAContext::Global;
         }
 
@@ -92,15 +94,15 @@ impl PAContext {
             return PAContext::Global;
         }
 
-        if elems.len() > config.context_k {
-            elems = elems[elems.len() - config.context_k..].to_vec();
+        if elems.len() > config.default_k {
+            elems = elems[elems.len() - config.default_k..].to_vec();
         }
 
         PAContext::Elements(elems)
     }
 
     pub fn push_with_config(&self, elem: PAContextElem, config: &PAConfig) -> Self {
-        if config.context_mode == PAContextMode::Insensitive || config.context_k == 0 {
+        if config.context_mode == PAContextMode::Insensitive || config.default_k == 0 {
             return PAContext::Global;
         }
 
@@ -129,8 +131,8 @@ impl PAContext {
 
         elems.push(elem);
 
-        if elems.len() > config.context_k {
-            elems = elems[elems.len() - config.context_k..].to_vec();
+        if elems.len() > config.default_k {
+            elems = elems[elems.len() - config.default_k..].to_vec();
         }
 
         if elems.is_empty() {
@@ -172,15 +174,47 @@ impl PAContext {
 
 #[derive(Debug, Clone)]
 pub struct PAConfig {
+    /// true when skip the analysis on basicblocks with "cleanup" and their successors
+    /// these are mostly unwind paths, panic cleanup, and destructor paths.
+    /// our goal is normal execution pointer flow rather than unwind/destructor behavior.
+    /// default = true
+    pub skip_cleanup_blocks: bool,
+    /// true when we do on-the-fly to compute reachable functions
+    /// default = true
+    pub on_the_fly: bool,
+
+    /// kcfa, kobj, mixed, insensitive?
+    /// default = insensitive
     pub context_mode: PAContextMode,
-    pub context_k: usize,
+    /// max length of context elements in a context
+    /// default = 0
+    pub default_k: usize,
+
+    /// true when only application (app_crate) functions carry a call context;
+    /// library/runtime plumbing stays Global.
+    /// default = false
+    pub app_only: bool,
+    /// true when (llm, access-control) catalogs are provided;
+    /// then create context when seeing these functions
+    /// default = false
+    pub afg_special: bool,
+    /// together with afg_special = true:
+    /// (llm, access-control) catalogs; when set, matched call sites are recorded
+    /// as context points while the analysis visits calls
+    /// default = None
+    pub context_signatures: Option<(Vec<Signature>, Vec<Signature>)>,
 }
 
 impl Default for PAConfig {
     fn default() -> Self {
         Self {
+            skip_cleanup_blocks: true,
+            on_the_fly: true,
             context_mode: PAContextMode::Insensitive,
-            context_k: 0,
+            default_k: 0,
+            app_only: false,
+            afg_special: false,
+            context_signatures: None,
         }
     }
 }
@@ -188,29 +222,61 @@ impl Default for PAConfig {
 impl PAConfig {
     pub fn insensitive() -> Self {
         Self {
+            skip_cleanup_blocks: true,
+            on_the_fly: true,
             context_mode: PAContextMode::Insensitive,
-            context_k: 0,
+            default_k: 0,
+            app_only: false,
+            afg_special: false,
+            context_signatures: None,
         }
     }
 
     pub fn k_callsite(k: usize) -> Self {
         Self {
+            skip_cleanup_blocks: true,
+            on_the_fly: true,
             context_mode: PAContextMode::KCallSite,
-            context_k: k,
+            default_k: k,
+            app_only: true, // TODO: need to update
+            afg_special: false,
+            context_signatures: None,
         }
     }
 
     pub fn k_object(k: usize) -> Self {
         Self {
+            skip_cleanup_blocks: true,
+            on_the_fly: true,
             context_mode: PAContextMode::KObject,
-            context_k: k,
+            default_k: k,
+            app_only: true, // TODO: need to update
+            afg_special: false,
+            context_signatures: None,
         }
     }
 
     pub fn k_mixed(k: usize) -> Self {
         Self {
+            skip_cleanup_blocks: true,
+            on_the_fly: true,
             context_mode: PAContextMode::KMixed,
-            context_k: k,
+            default_k: k,
+            app_only: true, // TODO: need to update
+            afg_special: false,
+            context_signatures: None,
+        }
+    }
+
+    pub fn afg(context_signatures: Option<(Vec<Signature>, Vec<Signature>)>) -> Self {
+        Self {
+            skip_cleanup_blocks: true,
+            on_the_fly: true,
+            context_mode: PAContextMode::KCallSite, // TODO: need to update
+            default_k: 1,                           // TODO: need to update
+            app_only: false,
+            afg_special: true,
+            context_signatures: context_signatures,
         }
     }
 }

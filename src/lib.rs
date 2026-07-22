@@ -94,13 +94,19 @@ impl<'m> ModuleAnalysis<'m> {
     }
 
     /// Get the `PointerAssignmentGraph` for the `Module`.
-    pub fn pointer_assignment_graph(&self) -> Ref<PointerAssignmentGraph<'m>> {
+    pub fn pointer_assignment_graph(
+        &self,
+        mode: &str,
+        k: Option<usize>,
+    ) -> Ref<PointerAssignmentGraph<'m>> {
         self.pointer_assignment_graph.get_or_insert_with(move || {
             let functions_by_type = self.functions_by_type();
             debug!("computing single-module pointer assignment graph");
             PointerAssignmentGraph::new(
                 std::iter::once(self.module),
                 &functions_by_type,
+                mode,
+                k,
                 self.context_catalogs.clone(),
             )
         })
@@ -202,13 +208,19 @@ impl<'m> CrossModuleAnalysis<'m> {
     /// Get the full `PointerAssignmentGraph` for the `Module`(s).
     ///
     /// This will include both cross-module and within-module constraints.
-    pub fn pointer_assignment_graph(&self) -> Ref<PointerAssignmentGraph<'m>> {
+    pub fn pointer_assignment_graph(
+        &self,
+        mode: &str,
+        k: Option<usize>,
+    ) -> Ref<PointerAssignmentGraph<'m>> {
         self.pointer_assignment_graph.get_or_insert_with(move || {
             let functions_by_type = self.functions_by_type();
             debug!("computing multi-module pointer assignment graph");
             PointerAssignmentGraph::new(
                 self.modules(),
                 &functions_by_type,
+                mode,
+                k,
                 self.context_catalogs.clone(),
             )
         })
