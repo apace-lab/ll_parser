@@ -145,64 +145,60 @@ fn main() -> Result<(), Box<dyn Error>> {
         println!("Wrote pointer assignment graph to cg.txt");
     }
 
-    // load context catalogs if both are given, so the analysis records context points
-    let llm_api_path = get_flag_value(&args, "--api=");
-    let ac_path = get_flag_value(&args, "--ac=");
-
-    match (llm_api_path, ac_path) {
-        (Some(llm_api_path), Some(ac_path)) => {
-            let llm_api =
-                ll_parser::context_finder::load_signatures(std::path::Path::new(llm_api_path))?;
-            let ac = ll_parser::context_finder::load_signatures(std::path::Path::new(ac_path))?;
-            println!(
-                "Loaded {} LLM and {} AC signatures",
-                llm_api.len(),
-                ac.len()
-            );
-            analysis.set_context_catalogs(llm_api, ac);
-        }
-
-        // TODO: we should be able to only take api or ac. will be handled for later
-        (Some(_), None) => {
-            eprintln!("Error: --api was provided, but --ac is missing.");
-            eprintln!("Usage: cargo run -- input.ll --api=api.txt --ac=ac.txt");
-            return Ok(());
-        }
-
-        (None, Some(_)) => {
-            eprintln!("Error: --ac was provided, but --api is missing.");
-            eprintln!("Usage: cargo run -- input.ll --api=api.txt --ac=ac.txt");
-            return Ok(());
-        }
-
-        (None, None) => {
-            // No context catalogs provided.
-        }
-    }
-
     // generate pag (records context points during the analysis if catalogs were set)
     if let Some(mode) = get_flag_value(&args, "--pag=") {
         let k = get_flag_value(&args, "--k=");
-        if mode == "kcfa" || mode == "kobj" || mode == "kmix" {
-            // Use k here
-            if k.is_none() {
-                eprintln!("PAG mode {} requires --k=<number>", mode);
-                std::process::exit(1);
+        match mode {
+            "kcfa" | "kobj" | "kmix" => {
+                // must have k
+                if k.is_none() {
+                    eprintln!("PAG mode {} requires --k=<number>", mode);
+                    std::process::exit(1);
+                }
+
+                let k_size: Option<usize> = k.map(|value| {
+                    value
+                        .parse::<usize>()
+                        .expect("--k must be a non-negative integer")
+                });
+
+                let pag: std::cell::Ref<'_, ll_parser::PointerAssignmentGraph<'_>> =
+                    analysis.pointer_assignment_graph(mode, k_size);
+                pag.print_pointer_assignment_graph()?;
             }
 
-            let k_size: Option<usize> = k.map(|value| {
-                value
-                    .parse::<usize>()
-                    .expect("--k must be a non-negative integer")
-            });
+            "afg" => {
+                // load context catalogs if both are given, so the analysis records context points
+                let llm_api_path = get_flag_value(&args, "--api=");
+                let ac_path = get_flag_value(&args, "--ac=");
+                if let (Some(llm_api_path), Some(ac_path)) = (llm_api_path, ac_path) {
+                    let llm_api = ll_parser::context_finder::load_signatures(
+                        std::path::Path::new(llm_api_path),
+                    )?;
+                    let ac =
+                        ll_parser::context_finder::load_signatures(std::path::Path::new(ac_path))?;
+                    println!(
+                        "Loaded {} LLM API and {} AC signatures",
+                        llm_api.len(),
+                        ac.len()
+                    );
+                    analysis.set_context_catalogs(llm_api, ac);
 
-            let pag: std::cell::Ref<'_, ll_parser::PointerAssignmentGraph<'_>> =
-                analysis.pointer_assignment_graph(mode, k_size);
-            pag.print_pointer_assignment_graph()?;
-        } else {
-            let pag: std::cell::Ref<'_, ll_parser::PointerAssignmentGraph<'_>> =
-                analysis.pointer_assignment_graph(mode, None);
-            pag.print_pointer_assignment_graph()?;
+                    let pag: std::cell::Ref<'_, ll_parser::PointerAssignmentGraph<'_>> =
+                        analysis.pointer_assignment_graph(mode, None);
+                    pag.print_pointer_assignment_graph()?;
+                } else {
+                    eprintln!("Usage: cargo run -- input.ll --api=api.json --ac=ac.json");
+                    return Ok(());
+                }
+            }
+
+            _ => {
+                // default
+                let pag: std::cell::Ref<'_, ll_parser::PointerAssignmentGraph<'_>> =
+                    analysis.pointer_assignment_graph(mode, None);
+                pag.print_pointer_assignment_graph()?;
+            }
         }
 
         println!("Wrote pointer assignment graph to pag.txt");

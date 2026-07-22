@@ -172,6 +172,21 @@ impl PAContext {
     }
 }
 
+#[derive(Debug, Clone, Copy)]
+pub enum PAContextSelectPolicy {
+    /// use our default exclusion list and only apply Global to those functions
+    Default,
+    /// only application (app_crate) functions carry a
+    /// call context; library/runtime plumbing stays Global. this bounds the
+    /// (function, context) instantiation blow-up (std/core/tokio would otherwise
+    /// be re-analyzed under every distinct caller context) while keeping context
+    /// where per-user precision actually matters. no-op when app_crate is empty.
+    AppOnly,
+    /// when (llm, access-control) catalogs are provided;
+    /// then create context when seeing these functions
+    AFG,
+}
+
 #[derive(Debug, Clone)]
 pub struct PAConfig {
     /// true when skip the analysis on basicblocks with "cleanup" and their successors
@@ -190,15 +205,9 @@ pub struct PAConfig {
     /// default = 0
     pub default_k: usize,
 
-    /// true when only application (app_crate) functions carry a call context;
-    /// library/runtime plumbing stays Global.
-    /// default = false
-    pub app_only: bool,
-    /// true when (llm, access-control) catalogs are provided;
-    /// then create context when seeing these functions
-    /// default = false
-    pub afg_special: bool,
-    /// together with afg_special = true:
+    /// which functions we apply context-sensitivity on
+    pub policy: PAContextSelectPolicy,
+    /// together with AFG:
     /// (llm, access-control) catalogs; when set, matched call sites are recorded
     /// as context points while the analysis visits calls
     /// default = None
@@ -212,8 +221,7 @@ impl Default for PAConfig {
             on_the_fly: true,
             context_mode: PAContextMode::Insensitive,
             default_k: 0,
-            app_only: false,
-            afg_special: false,
+            policy: PAContextSelectPolicy::Default,
             context_signatures: None,
         }
     }
@@ -226,8 +234,7 @@ impl PAConfig {
             on_the_fly: true,
             context_mode: PAContextMode::Insensitive,
             default_k: 0,
-            app_only: false,
-            afg_special: false,
+            policy: PAContextSelectPolicy::Default,
             context_signatures: None,
         }
     }
@@ -238,8 +245,7 @@ impl PAConfig {
             on_the_fly: true,
             context_mode: PAContextMode::KCallSite,
             default_k: k,
-            app_only: true, // TODO: need to update
-            afg_special: false,
+            policy: PAContextSelectPolicy::Default,
             context_signatures: None,
         }
     }
@@ -250,8 +256,7 @@ impl PAConfig {
             on_the_fly: true,
             context_mode: PAContextMode::KObject,
             default_k: k,
-            app_only: true, // TODO: need to update
-            afg_special: false,
+            policy: PAContextSelectPolicy::Default,
             context_signatures: None,
         }
     }
@@ -262,8 +267,7 @@ impl PAConfig {
             on_the_fly: true,
             context_mode: PAContextMode::KMixed,
             default_k: k,
-            app_only: true, // TODO: need to update
-            afg_special: false,
+            policy: PAContextSelectPolicy::Default,
             context_signatures: None,
         }
     }
@@ -274,8 +278,7 @@ impl PAConfig {
             on_the_fly: true,
             context_mode: PAContextMode::KCallSite, // TODO: need to update
             default_k: 1,                           // TODO: need to update
-            app_only: false,
-            afg_special: true,
+            policy: PAContextSelectPolicy::AFG,
             context_signatures: context_signatures,
         }
     }

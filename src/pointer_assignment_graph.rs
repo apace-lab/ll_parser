@@ -1,5 +1,7 @@
 use crate::call_graph::CallGraph;
-use crate::context::{PAConfig, PAContext, PAContextElem, PAContextMode, PAObjectContextKind};
+use crate::context::{
+    PAConfig, PAContext, PAContextElem, PAContextMode, PAContextSelectPolicy, PAObjectContextKind,
+};
 use crate::context_finder::{ContextKind, ContextPoint, Signature};
 use crate::ControlFlowGraph;
 use crate::FunctionsByType;
@@ -2019,29 +2021,30 @@ impl<'m> PointerAssignmentGraph<'m> {
         self.selective_callee_context(callee_name, computed)
     }
 
-    /// selective context policy: only application (app_crate) functions carry a
-    /// call context; library/runtime plumbing stays Global. this bounds the
-    /// (function, context) instantiation blow-up (std/core/tokio would otherwise
-    /// be re-analyzed under every distinct caller context) while keeping context
-    /// where per-user precision actually matters. no-op when app_crate is empty.
+    /// apply selective context policy
     fn selective_callee_context(&self, callee_name: &str, computed: PAContext) -> PAContext {
-        if self.config.app_only {
-            if self.app_crate.is_empty() || self.context_relevant(callee_name) {
-                debug!(
-                    "[PAG] selective context (app-only): function {} -> context {:?}",
-                    callee_name, computed
-                );
+        match self.config.policy {
+            PAContextSelectPolicy::AppOnly => {
+                if self.app_crate.is_empty() || self.context_relevant(callee_name) {
+                    debug!(
+                        "[PAG] selective context (app-only): function {} -> context {:?}",
+                        callee_name, computed
+                    );
 
-                return computed;
-            } else {
-                debug!(
-                    "[PAG] selective global context for function {}",
-                    callee_name
-                );
+                    return computed;
+                } else {
+                    debug!(
+                        "[PAG] selective global context for function {}",
+                        callee_name
+                    );
 
-                return PAContext::global();
+                    return PAContext::global();
+                }
             }
-        } else if self.config.afg_special {
+
+            PAContextSelectPolicy::AFG => {}
+
+            PAContextSelectPolicy::Default => {}
         }
 
         PAContext::global()
