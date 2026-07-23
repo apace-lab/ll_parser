@@ -28,8 +28,8 @@ pub struct Signature {
 #[derive(Debug, Clone)]
 pub struct ContextPoint {
     pub kind: ContextKind,
-    pub function: String,
-    pub block: String,
+    pub caller: String, // for debugging purpose
+    pub block: String,  // caller's basic block, for debugging purpose
     pub callee: String,
     pub matched_fn_name: String,
     pub category: Option<String>,
@@ -134,7 +134,7 @@ pub fn match_callsite(
 
     Some(ContextPoint {
         kind,
-        function: format!("{:#}", demangle(&strip_symbol(caller))),
+        caller: format!("{:#}", demangle(&strip_symbol(caller))),
         block: block.to_string(),
         callee: demangled.to_string(),
         matched_fn_name: sig.fn_name.clone(),

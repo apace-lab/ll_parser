@@ -14,10 +14,11 @@ pub enum PAContextElem {
 
     Object {
         kind: PAObjectContextKind,
+        /// where obj is allocated
         function: String,
         block: String,
-        /// node id
-        id: String,
+        /// receiver obj node id
+        id: usize,
     },
 }
 
@@ -64,6 +65,13 @@ pub enum PAContextMode {
 impl PAContext {
     pub fn global() -> Self {
         PAContext::Global
+    }
+
+    pub fn len(&self) -> usize {
+        match self {
+            PAContext::Global => 0,
+            PAContext::Elements(elems) => elems.len(),
+        }
     }
 
     pub fn elems(&self) -> &[PAContextElem] {
@@ -144,7 +152,7 @@ impl PAContext {
 
     pub fn key(&self) -> String {
         match self {
-            PAContext::Global => "G".to_string(),
+            PAContext::Global => "Global".to_string(),
 
             PAContext::Elements(elems) => elems
                 .iter()
@@ -154,16 +162,16 @@ impl PAContext {
                         block,
                         callsite_id,
                     } => {
-                        format!("C({}:{}:{})", caller, block, callsite_id)
+                        format!("Callsite({}:{}:{})", caller, block, callsite_id)
                     }
 
                     PAContextElem::Object {
                         kind,
-                        function,
+                        function: caller,
                         block,
                         id,
                     } => {
-                        format!("O({:?}:{}:{}:{})", kind, function, block, id)
+                        format!("Obj({:?}:{}:{}:{})", kind, caller, block, id)
                     }
                 })
                 .collect::<Vec<_>>()
@@ -245,7 +253,7 @@ impl PAConfig {
             on_the_fly: true,
             context_mode: PAContextMode::KCallSite,
             default_k: k,
-            policy: PAContextSelectPolicy::Default,
+            policy: PAContextSelectPolicy::AppOnly,
             context_signatures: None,
         }
     }

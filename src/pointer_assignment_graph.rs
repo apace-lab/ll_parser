@@ -5,6 +5,7 @@ use crate::context::{
 use crate::context_finder::{ContextKind, ContextPoint, Signature};
 use crate::ControlFlowGraph;
 use crate::FunctionsByType;
+use core::panic;
 use llvm_ir::instruction::{InlineAssembly, Instruction};
 use llvm_ir::{Constant, ConstantRef, Function, Module, Name, Operand, Type, TypeRef};
 use log::debug;
@@ -13,8 +14,8 @@ use std::collections::{BTreeMap, BTreeSet, HashMap, VecDeque};
 use std::error::Error;
 use std::fs::File;
 use std::io::Write;
+use std::println;
 use std::time::Instant;
-use std::{panic, println};
 
 /// field-sensitive: to avoid circular dependency in gep, where %x = gep(%a, ...), then %a = %x
 /// then there will be infinite fieldobject created in this loop
@@ -40,6 +41,7 @@ pub enum PANodeKind<'m> {
     // DerefOperand(&'m llvm_ir::Operand),
     AllocaObject {
         function: String,
+        block: String,
         dest: &'m llvm_ir::Name,
         allocated_type: &'m TypeRef,
     },
@@ -93,6 +95,7 @@ pub enum PANodeKind<'m> {
         function: String,
         block: String,
         name: String,
+        obj_callsite: usize, // callsite_id
     },
 }
 
@@ -149,9 +152,15 @@ impl<'m> PANodeKind<'m> {
             // Self::DerefOperand(op) => format!("deref::{:?}", op),
             Self::AllocaObject {
                 function,
+                block,
                 dest,
                 allocated_type,
-            } => return format!("alloca_object::{}::{}::{}", function, dest, allocated_type),
+            } => {
+                return format!(
+                    "alloca_object::{}::{}::{}::{}",
+                    function, block, dest, allocated_type
+                )
+            }
 
             Self::FieldObject {
                 base,
@@ -197,7 +206,13 @@ impl<'m> PANodeKind<'m> {
                 function,
                 block,
                 name,
-            } => return format!("heap_object::{}::{}::{}", function, block, name),
+                obj_callsite,
+            } => {
+                return format!(
+                    "heap_object::{}::{}::{}::{}",
+                    function, block, name, obj_callsite
+                )
+            }
         }
     }
 }
@@ -478,8 +493,15 @@ impl<'m> PointerAssignmentGraph<'m> {
 
         if let Some(main_name) = pag.find_main_function_name() {
             println!("[PAG] potential main function: {}", main_name);
-            pag.app_crate = parse_app_crate(&main_name);
-            println!("[PAG] selective context app crate: {:?}", pag.app_crate);
+
+            match pag.config.policy {
+                PAContextSelectPolicy::AppOnly => {
+                    pag.app_crate = parse_app_crate(&main_name);
+                    println!("[PAG] selective context app crate: {:?}", pag.app_crate);
+                }
+                _ => {}
+            }
+
             pag.pending_functions
                 .push_back((main_name, PAContext::global()));
         } else {
@@ -488,8 +510,8 @@ impl<'m> PointerAssignmentGraph<'m> {
         }
 
         println!(
-            "[PAG] config: context mode = {:?} with k = {}",
-            pag.config.context_mode, pag.config.default_k
+            "[PAG] config: context mode = {:?} with k = {} under policy = {:?}",
+            pag.config.context_mode, pag.config.default_k, pag.config.policy
         );
 
         // discover new constraints and solve until fixed point
@@ -612,6 +634,7 @@ impl<'m> PointerAssignmentGraph<'m> {
         caller_name: &str,
         block_name: &str,
         callsite_kind: &PACallSiteKind<'m>,
+        callsite_id: usize,
         caller_context: PAContext,
     ) -> bool {
         // // <alloc::sync::Arc<T, A> as core::clone::Clone>::clone
@@ -673,6 +696,7 @@ impl<'m> PointerAssignmentGraph<'m> {
                     function: caller_name.to_string(),
                     block: block_name.to_string(),
                     name: format!("{}", result),
+                    obj_callsite: callsite_id,
                 };
 
                 self.add_pag_edge(
@@ -819,6 +843,7 @@ impl<'m> PointerAssignmentGraph<'m> {
                     Instruction::Alloca(alloca) => {
                         let src = PANodeKind::AllocaObject {
                             function: function_name.clone(),
+                            block: block_name.clone(),
                             dest: &alloca.dest,
                             allocated_type: &alloca.allocated_type,
                         };
@@ -1820,54 +1845,45 @@ impl<'m> PointerAssignmentGraph<'m> {
             caller_context.clone(),
         );
 
-        let callee_context = caller_context.clone().push_with_config(
-            callsite_context_elem(caller_name, block_name, callsite_id),
-            &self.config,
-        );
-
         // ------------------------------------------------------------
         // 1. Direct call: make sure call graph has caller -> callee.
         // ------------------------------------------------------------
         if let Some(direct_callee_name) = direct_callee_name {
-            // selective context: library/runtime callees stay Global so they are
-            // visited once, not re-instantiated under every caller context
-            let callee_context = self.selective_callee_context(&direct_callee_name, callee_context);
+            // // record a context point if this reachable call site matches a catalog
+            // let point = if let Some((llm, ac)) = self.config.context_signatures.as_ref() {
+            //     crate::context_finder::match_callsite(
+            //         &direct_callee_name,
+            //         caller_name,
+            //         block_name,
+            //         llm,
+            //         ac,
+            //     )
+            // } else {
+            //     None
+            // };
 
-            // record a context point if this reachable call site matches a catalog
-            let point = if let Some((llm, ac)) = self.config.context_signatures.as_ref() {
-                crate::context_finder::match_callsite(
-                    &direct_callee_name,
-                    caller_name,
-                    block_name,
-                    llm,
-                    ac,
-                )
-            } else {
-                None
-            };
-
-            if let Some(mut point) = point {
-                // record the PAG nodes for this call's args/result so their
-                // points-to sets can be resolved after the fixed point
-                let args = self.get_callsite_arguments(&callsite_kind);
-                for (op, _) in args {
-                    let n = self.get_or_create_node(
-                        get_nodekind_for_operand(op, caller_name.to_string()),
-                        caller_context.clone(),
-                    );
-                    point.arg_nodes.push(n);
-                }
-                if let Some(result) = self.get_callsite_result(&callsite_kind) {
-                    point.result_node = Some(self.get_or_create_node(
-                        PANodeKind::ValueName {
-                            function: caller_name.to_string(),
-                            name: result,
-                        },
-                        caller_context.clone(),
-                    ));
-                }
-                self.context_points.push(point);
-            }
+            // if let Some(mut point) = point {
+            //     // record the PAG nodes for this call's args/result so their
+            //     // points-to sets can be resolved after the fixed point
+            //     let args = self.get_callsite_arguments(&callsite_kind);
+            //     for (op, _) in args {
+            //         let n = self.get_or_create_node(
+            //             get_nodekind_for_operand(op, caller_name.to_string()),
+            //             caller_context.clone(),
+            //         );
+            //         point.arg_nodes.push(n);
+            //     }
+            //     if let Some(result) = self.get_callsite_result(&callsite_kind) {
+            //         point.result_node = Some(self.get_or_create_node(
+            //             PANodeKind::ValueName {
+            //                 function: caller_name.to_string(),
+            //                 name: result,
+            //             },
+            //             caller_context.clone(),
+            //         ));
+            //     }
+            //     self.context_points.push(point);
+            // }
 
             // handle special functions if exists
             // TODO: they are fine with caller_context for now
@@ -1876,6 +1892,7 @@ impl<'m> PointerAssignmentGraph<'m> {
                 caller_name,
                 block_name,
                 &callsite_kind,
+                callsite_id,
                 caller_context.clone(), // <- here
             ) {
                 return;
@@ -1888,6 +1905,8 @@ impl<'m> PointerAssignmentGraph<'m> {
 
             if let Some(callee_func) = callee_func {
                 let callee_name = callee_func.name.as_str();
+                let callee_context: PAContext =
+                    self.get_callee_context(&direct_callee_name, callsite_id, None);
 
                 self.add_cg_edge(
                     caller_name,
@@ -1932,7 +1951,7 @@ impl<'m> PointerAssignmentGraph<'m> {
             caller_name.to_string(),
             block_name.to_string(),
             caller_context.clone(),
-            callee_context.clone(),
+            caller_context.clone(),
         );
 
         // ------------------------------------------------------------
@@ -1959,7 +1978,7 @@ impl<'m> PointerAssignmentGraph<'m> {
                 caller_name.to_string(),
                 block_name.to_string(),
                 caller_context.clone(),
-                callee_context.clone(),
+                caller_context.clone(),
             );
         }
 
@@ -2006,51 +2025,271 @@ impl<'m> PointerAssignmentGraph<'m> {
         }
     }
 
-    fn get_callee_context_from_callsite(
+    fn get_callsite_context_elem(
         &self,
-        callee_name: &str,
-        callsite: &PACallSite<'m>,
-    ) -> PAContext {
-        let elem = PAContextElem::CallSite {
-            caller: normalize_function_name(&callsite.caller).to_string(),
-            block: callsite.block.clone(),
-            callsite_id: callsite.id,
-        };
-
-        let computed = callsite.context.push_with_config(elem, &self.config);
-        self.selective_callee_context(callee_name, computed)
+        caller: &str,
+        block: &str,
+        callsite_id: usize,
+    ) -> PAContextElem {
+        PAContextElem::CallSite {
+            caller: normalize_function_name(caller).to_string(),
+            block: block.to_string(),
+            callsite_id,
+        }
     }
 
-    /// apply selective context policy
-    fn selective_callee_context(&self, callee_name: &str, computed: PAContext) -> PAContext {
-        match self.config.policy {
-            PAContextSelectPolicy::AppOnly => {
-                if self.app_crate.is_empty() || self.context_relevant(callee_name) {
-                    debug!(
-                        "[PAG] selective context (app-only): function {} -> context {:?}",
-                        callee_name, computed
+    fn get_object_context_elem(&self, receiver_obj: PANodeId) -> Option<PAContextElem> {
+        let Some(node) = self.nodes.get(&receiver_obj) else {
+            panic!("no node for node id = {}", receiver_obj);
+        };
+
+        match &node.kind {
+            PANodeKind::HeapObject {
+                function, block, ..
+            } => {
+                let fname = function.clone();
+                return Some(PAContextElem::Object {
+                    kind: PAObjectContextKind::Allocation,
+                    function: normalize_function_name(&fname).to_string(),
+                    block: block.clone(),
+                    id: receiver_obj,
+                });
+            }
+
+            PANodeKind::AllocaObject {
+                function, block, ..
+            } => {
+                let fname = function.clone();
+                return Some(PAContextElem::Object {
+                    kind: PAObjectContextKind::Allocation,
+                    function: normalize_function_name(&fname).to_string(),
+                    block: block.clone(),
+                    id: receiver_obj,
+                });
+            }
+
+            _ => {
+                debug!(
+                    "[CTX] no allocation context for object n{} kind={:?}",
+                    receiver_obj, &node.kind
+                );
+                None
+            }
+        }
+    }
+
+    /// compute callee_context by applying different context policies
+    /// see PAContextSelectPolicy
+    fn get_callee_context(
+        &self,
+        callee_name: &str,
+        callsite_id: usize,
+        receiver_obj_id: Option<PANodeId>,
+    ) -> PAContext {
+        let Some(callsite) = self.callsites.get(&callsite_id) else {
+            panic!("cannot find callsite for callsite_id = {}", callsite_id);
+        };
+
+        let caller_name = &callsite.caller.clone();
+        let block_name = &callsite.block.clone();
+        let caller_context = &callsite.context.clone();
+
+        let callee_context = match self.config.context_mode {
+            PAContextMode::Insensitive => PAContext::Global,
+            PAContextMode::KCallSite => match self.config.policy {
+                PAContextSelectPolicy::Default => {
+                    let callee_context = caller_context.clone();
+
+                    if should_skip_function_context(callee_name) {
+                        return callee_context;
+                    }
+
+                    // create a new context based on caller_context
+                    let callee_context = callee_context.push_with_config(
+                        self.get_callsite_context_elem(caller_name, block_name, callsite_id),
+                        &self.config,
                     );
 
-                    return computed;
-                } else {
                     debug!(
-                        "[PAG] selective global context for function {}",
-                        callee_name
+                        "[PAG] select context (default): function {} -> context {:?}",
+                        callee_name, callee_context
                     );
 
-                    return PAContext::global();
+                    return callee_context;
+                }
+
+                PAContextSelectPolicy::AppOnly => {
+                    if self.app_crate.is_empty() || self.is_from_app_crate(callee_name) {
+                        // create a new context based on caller_context
+                        let callee_context = caller_context.clone().push_with_config(
+                            self.get_callsite_context_elem(caller_name, block_name, callsite_id),
+                            &self.config,
+                        );
+
+                        debug!(
+                            "[PAG] select context (app-only): function {} -> context {:?}",
+                            callee_name, callee_context
+                        );
+
+                        return callee_context;
+                    } else {
+                        debug!(
+                            "[PAG] select global context (app-only): function {}",
+                            callee_name
+                        );
+
+                        return PAContext::global();
+                    }
+                }
+
+                // TODO: move to KMixed
+                PAContextSelectPolicy::AFG => {
+                    // TODO: do we need so complex matching?
+                    let matched = if let Some((llm, ac)) = self.config.context_signatures.as_ref() {
+                        crate::context_finder::match_callsite(
+                            callee_name,
+                            caller_name, // this is not used
+                            block_name,  // this is not used
+                            llm,
+                            ac,
+                        )
+                    } else {
+                        None
+                    };
+
+                    let callee_context = caller_context.clone();
+
+                    if matched.is_some() {
+                        // create a new context based on caller_context
+                        callee_context.push_with_config(
+                            self.get_callsite_context_elem(caller_name, block_name, callsite_id),
+                            &self.config,
+                        );
+                    }
+
+                    return callee_context;
+                }
+            },
+
+            // TODO: we may need to use receiver_obj's type as filter, not callee_name
+            PAContextMode::KObject => {
+                let Some(receiver_obj) = receiver_obj_id else {
+                    debug!("no receiver_obj_id for receiver-dispatched call.");
+                    return caller_context.clone();
+                };
+
+                match self.config.policy {
+                    PAContextSelectPolicy::Default => {
+                        let callee_context = caller_context.clone();
+
+                        if should_skip_function_context(callee_name) {
+                            return callee_context;
+                        }
+
+                        let Some(ctx) = self.get_object_context_elem(receiver_obj) else {
+                            return callee_context;
+                        };
+
+                        // create a new context based on caller_context
+                        callee_context.push_with_config(ctx, &self.config)
+                    }
+
+                    PAContextSelectPolicy::AppOnly => {
+                        if self.app_crate.is_empty() || self.is_from_app_crate(callee_name) {
+                            let Some(ctx) = self.get_object_context_elem(receiver_obj) else {
+                                return caller_context.clone();
+                            };
+
+                            // create a new context based on caller_context
+                            let callee_context =
+                                caller_context.clone().push_with_config(ctx, &self.config);
+
+                            debug!(
+                                "[PAG] select context (app-only): function {} -> context {:?}",
+                                callee_name, callee_context
+                            );
+
+                            return callee_context;
+                        } else {
+                            return caller_context.clone();
+                        }
+                    }
+                    PAContextSelectPolicy::AFG => {
+                        // TODO: the settign should not reach here; always return global here
+                        return PAContext::Global;
+                    }
                 }
             }
 
-            PAContextSelectPolicy::AFG => {}
+            PAContextMode::KMixed => match self.config.policy {
+                PAContextSelectPolicy::Default => {
+                    if should_skip_function_context(callee_name) {
+                        return caller_context.clone();
+                    }
 
-            PAContextSelectPolicy::Default => {}
-        }
+                    // 1. create a new context based on callsite
+                    let callee_context = caller_context.clone().push_with_config(
+                        self.get_callsite_context_elem(caller_name, block_name, callsite_id),
+                        &self.config,
+                    );
 
-        PAContext::global()
+                    // 2. Selectively append receiver object.
+                    if let Some(receiver_obj) = receiver_obj_id {
+                        let Some(ctx) = self.get_object_context_elem(receiver_obj) else {
+                            return callee_context;
+                        };
+
+                        return callee_context.push_with_config(ctx, &self.config);
+                    }
+
+                    callee_context
+                }
+                PAContextSelectPolicy::AppOnly => {
+                    // TODO:
+                    return PAContext::Global;
+                }
+                PAContextSelectPolicy::AFG => {
+                    let matched = if let Some((llm, ac)) = self.config.context_signatures.as_ref() {
+                        crate::context_finder::match_callsite(
+                            callee_name,
+                            caller_name, // this is not used
+                            block_name,  // this is not used
+                            llm,
+                            ac,
+                        )
+                    } else {
+                        None
+                    };
+
+                    let callee_context = caller_context.clone();
+
+                    // 1. create a new context based on callsite
+                    if matched.is_some() {
+                        callee_context.push_with_config(
+                            self.get_callsite_context_elem(caller_name, block_name, callsite_id),
+                            &self.config,
+                        );
+                    }
+
+                    // 2. Selectively append receiver object.
+                    // TODO: we need a filter here to only consider user input obj
+                    if let Some(receiver_obj) = receiver_obj_id {
+                        let Some(ctx) = self.get_object_context_elem(receiver_obj) else {
+                            return callee_context;
+                        };
+
+                        callee_context.push_with_config(ctx, &self.config);
+                    }
+
+                    return callee_context;
+                }
+            },
+        };
+
+        return callee_context;
     }
 
-    fn context_relevant(&self, function_name: &str) -> bool {
+    fn is_from_app_crate(&self, function_name: &str) -> bool {
         function_name.contains(&self.app_crate)
     }
 
@@ -2894,8 +3133,8 @@ impl<'m> PointerAssignmentGraph<'m> {
 
         let mut changed = false;
 
-        for obj_id in delta {
-            let Some(callee_name) = self.get_function_object_from_nodeid(*obj_id) else {
+        for callee_id in delta {
+            let Some(callee_name) = self.get_function_object_from_nodeid(*callee_id) else {
                 continue;
             };
 
@@ -2905,7 +3144,7 @@ impl<'m> PointerAssignmentGraph<'m> {
             };
 
             let callee_name = callee_func.name.as_str();
-            let callee_context = self.get_callee_context_from_callsite(callee_name, &callsite);
+            let callee_context = self.get_callee_context(callee_name, callsite.id, None);
 
             if self.add_cg_edge(
                 &callsite.caller.clone(),
@@ -2965,7 +3204,8 @@ impl<'m> PointerAssignmentGraph<'m> {
 
             for callee_func in candidate_callees {
                 let callee_name = callee_func.name.as_str();
-                let callee_context = self.get_callee_context_from_callsite(callee_name, &callsite);
+                let callee_context =
+                    self.get_callee_context(callee_name, callsite.id, Some(*receiver_obj));
 
                 if self.add_cg_edge(
                     &callsite.caller.clone(),
@@ -3374,6 +3614,8 @@ impl<'m> PointerAssignmentGraph<'m> {
 
         self.print_node_kind_statistics();
         self.print_edge_kind_statistics();
+        self.print_context_statistics();
+        self.print_node_context_statistics();
         // self.print_vtable_function_refs();
 
         if self.config.context_signatures.is_some() {
@@ -3406,7 +3648,7 @@ impl<'m> PointerAssignmentGraph<'m> {
                 "  [{}] {} in {}::{}  (matched {} / {} / {})",
                 kind,
                 point.callee,
-                point.function,
+                point.caller,
                 point.block,
                 point.matched_fn_name,
                 category,
@@ -3531,6 +3773,43 @@ impl<'m> PointerAssignmentGraph<'m> {
 
         for (kind, count) in entries {
             println!("{}: {}", kind, count);
+        }
+    }
+
+    pub fn print_context_statistics(&self) {
+        let mut functions_per_ctx: BTreeMap<String, usize> = BTreeMap::new();
+        let mut ctx_lengths: BTreeMap<usize, usize> = BTreeMap::new();
+
+        for (function, ctx) in &self.visited_functions {
+            *functions_per_ctx.entry(ctx.key()).or_default() += 1;
+            *ctx_lengths.entry(ctx.len()).or_default() += 1;
+
+            println!("[CTX FUNC] {} @ {}", function, ctx.key());
+        }
+
+        println!();
+        println!("=== Context Statistics ===");
+        println!(
+            "distinct function instances: {}",
+            self.visited_functions.len()
+        );
+        println!("distinct contexts: {}", functions_per_ctx.len());
+        println!("context length histogram: {:?}", ctx_lengths);
+    }
+
+    pub fn print_node_context_statistics(&self) {
+        let mut nodes_per_ctx: BTreeMap<String, usize> = BTreeMap::new();
+
+        for node in self.nodes.values() {
+            *nodes_per_ctx.entry(node.context.key()).or_default() += 1;
+        }
+
+        println!();
+        println!("=== Node Context Statistics ===");
+        println!("distinct node contexts: {}", nodes_per_ctx.len());
+
+        for (ctx, count) in nodes_per_ctx.iter().take(30) {
+            println!("  {} -> {} nodes", ctx, count);
         }
     }
 
@@ -4089,6 +4368,33 @@ fn should_skip_function_body(function_name: &str) -> bool {
     false
 }
 
+/// heuristically skip creating new contexts for these functions,
+/// just use Global
+fn should_skip_function_context(function_name: &str) -> bool {
+    let name = normalize_function_name(function_name);
+
+    if name.contains("panic")
+        || name.contains("panicking")
+        || name.contains("unwrap_failed")
+        || name.contains("rust_begin_unwind")
+        || name.contains("__rust_start_panic")
+        || name.contains("_Unwind_")
+    {
+        return true;
+    }
+
+    if name.starts_with("llvm.")
+        || name.contains("llvm.")
+        || name.contains("memcpy")
+        || name.contains("memmove")
+        || name.contains("memset")
+    {
+        return true;
+    }
+
+    false
+}
+
 /// process vtables from global variable to find function references in constant tables
 fn collect_vtable_functions<'m>(
     modules: &[&'m llvm_ir::Module],
@@ -4290,28 +4596,6 @@ fn normalize_block_label(name: &str) -> String {
 
 fn is_cleanup_block_name(name: &str) -> bool {
     name == "cleanup" || name.starts_with("cleanup.") || name.starts_with("cleanup")
-}
-
-fn callsite_context_elem(caller: &str, block: &str, callsite_id: usize) -> PAContextElem {
-    PAContextElem::CallSite {
-        caller: caller.to_string(),
-        block: block.to_string(),
-        callsite_id,
-    }
-}
-
-fn object_context_elem(
-    kind: PAObjectContextKind,
-    function: &str,
-    block: &str,
-    id: impl Into<String>,
-) -> PAContextElem {
-    PAContextElem::Object {
-        kind,
-        function: function.to_string(),
-        block: block.to_string(),
-        id: id.into(),
-    }
 }
 
 fn get_nodekind_for_operand<'m>(op: &'m llvm_ir::Operand, function_name: String) -> PANodeKind {
