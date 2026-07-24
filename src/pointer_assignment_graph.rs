@@ -6,6 +6,7 @@ use crate::context_finder::{ContextKind, ContextPoint, Signature};
 use crate::ControlFlowGraph;
 use crate::FunctionsByType;
 use core::panic;
+use llvm_ir::function::Parameter;
 use llvm_ir::instruction::{InlineAssembly, Instruction};
 use llvm_ir::{Constant, ConstantRef, Function, Module, Name, Operand, Type, TypeRef};
 use log::debug;
@@ -14,8 +15,8 @@ use std::collections::{BTreeMap, BTreeSet, HashMap, VecDeque};
 use std::error::Error;
 use std::fs::File;
 use std::io::Write;
-use std::println;
 use std::time::Instant;
+use std::{format, println};
 
 /// field-sensitive: to avoid circular dependency in gep, where %x = gep(%a, ...), then %a = %x
 /// then there will be infinite fieldobject created in this loop
@@ -27,18 +28,28 @@ const BYTE_OFFSET_SUMMARY: u64 = u64::MAX - 2;
 
 pub type PANodeId = usize;
 
+pub enum PAValueRef<'m> {
+    Operand(&'m llvm_ir::Operand),
+    Parameter(&'m llvm_ir::function::Parameter),
+    Name {
+        name: &'m llvm_ir::Name,
+        ty: Option<llvm_ir::TypeRef>,
+    },
+}
+
 #[derive(Debug, Clone)]
 pub enum PANodeKind<'m> {
-    ValueName {
-        function: String,
-        name: &'m llvm_ir::Name,
-    },
-    Operand {
+    SSAValue {
         /// exist is if LocalOperand
         function: Option<String>,
+        name: &'m llvm_ir::Name,
+        ty: Option<llvm_ir::TypeRef>,
+    },
+
+    Constant {
         op: &'m llvm_ir::Operand,
     },
-    // DerefOperand(&'m llvm_ir::Operand),
+
     AllocaObject {
         function: String,
         block: String,
@@ -52,17 +63,15 @@ pub enum PANodeKind<'m> {
         field_type: Option<llvm_ir::TypeRef>,
     },
 
-    FormalParameter {
+    /// the return value of a function
+    FunctionReturn {
         function: String,
-        index: usize,
-        name: String,
     },
 
-    /// the return value of a function
-    FunctionReturn { function: String },
-
     /// the function object itself
-    FunctionObject { function: String },
+    FunctionObject {
+        function: String,
+    },
 
     /// the receiver object of a call instruction (e.g., the `self` or `this` pointer)
     ReceiverObject {
@@ -80,16 +89,26 @@ pub enum PANodeKind<'m> {
     },
 
     /// a global object (e.g., a global allocation or a global function)
-    GlobalObject { name: String },
+    GlobalObject {
+        name: String,
+    },
 
     /// intermediate var
-    GlobalAddress { name: String },
+    GlobalAddress {
+        name: String,
+    },
 
     /// a global object that is part of a table (e.g., a vtable or a function pointer table)
-    TableSlot { global: String, index: usize },
+    TableSlot {
+        global: String,
+        index: usize,
+    },
 
     /// the value packed into a field of an aggregate SSA value (insertvalue)
-    AggregateField { origin: PANodeId, field: Vec<u64> },
+    AggregateField {
+        origin: PANodeId,
+        field: Vec<u64>,
+    },
 
     /// a heap allocation site (modeled heuristically at the allocator callsite)
     HeapObject {
@@ -97,6 +116,7 @@ pub enum PANodeKind<'m> {
         block: String,
         name: String,
         obj_callsite_id: usize,
+        allocated_type: Option<llvm_ir::TypeRef>, // TODO: ??
     },
 }
 
@@ -135,22 +155,16 @@ impl<'m> PANode<'m> {
 impl<'m> PANodeKind<'m> {
     pub fn key(&self) -> String {
         match self {
-            Self::ValueName { function, name } => return format!("ssa::{}::{}", function, name),
-            Self::Operand { function, op } => {
-                // alias a LocalOperand use `%x` with its ValueName def: key on the
-                // name only, dropping the operand's type/addr_space (which the
-                // operand's Display would otherwise include), so `<ptr %x>` and
-                // `%x` map to the same node. `function` is Some iff LocalOperand.
-                if let Some(function) = function {
-                    if let Operand::LocalOperand { name, .. } = op {
-                        return format!("ssa::{}::{}", function, name);
-                    }
-                    return format!("ssa::{}::{}", function, op);
-                } else {
-                    return format!("operand::{:?}", op);
-                };
+            Self::SSAValue { function, name, .. } => {
+                return format!(
+                    "ssa::{:?}::{}",
+                    function.as_deref().unwrap_or("<global>"),
+                    name_key(name)
+                );
             }
-            // Self::DerefOperand(op) => format!("deref::{:?}", op),
+
+            Self::Constant { op } => return format!("constant::{}", op),
+
             Self::AllocaObject {
                 function,
                 block,
@@ -158,7 +172,7 @@ impl<'m> PANodeKind<'m> {
                 allocated_type,
             } => {
                 return format!(
-                    "alloca_object::{}::{}::{}::{}",
+                    "alloca_object::{}::{}::{}::{}(type)",
                     function, block, dest, allocated_type
                 )
             }
@@ -167,13 +181,12 @@ impl<'m> PANodeKind<'m> {
                 base,
                 field,
                 field_type,
-            } => return format!("field_object::n{}::{:?}::{:?}", base, field, field_type),
-
-            Self::FormalParameter {
-                function,
-                index,
-                name,
-            } => return format!("formal_param::{}::{}::{}", function, index, name),
+            } => {
+                return format!(
+                    "field_object::n{}::{:?}::{:?}(type)",
+                    base, field, field_type
+                )
+            }
 
             Self::FunctionReturn { function } => return format!("function_return::{}", function),
 
@@ -186,7 +199,7 @@ impl<'m> PANodeKind<'m> {
                 self_idx,
             } => {
                 return format!(
-                    "receiver_object::{}::{}::{}::{}",
+                    "receiver_object::{}::{}::{}(cs_id)::{}(self_idx)",
                     caller, block, callsite_id, self_idx
                 )
             }
@@ -197,7 +210,7 @@ impl<'m> PANodeKind<'m> {
                 callsite_id,
             } => {
                 return format!(
-                    "indirect_call_target::{}::{}::{}",
+                    "indirect_call_target::{}::{}::{}(cs_id)",
                     caller, block, callsite_id
                 )
             }
@@ -219,10 +232,11 @@ impl<'m> PANodeKind<'m> {
                 block,
                 name,
                 obj_callsite_id,
+                allocated_type,
             } => {
                 return format!(
-                    "heap_object::{}::{}::{}::{}",
-                    function, block, name, obj_callsite_id
+                    "heap_object::{}::{}::{}::{}(cs_id)::{:?}(type)",
+                    function, block, name, obj_callsite_id, allocated_type,
                 )
             }
         }
@@ -681,14 +695,8 @@ impl<'m> PointerAssignmentGraph<'m> {
                 // self.add_global_address_if_needed(src_ptr, function_name, block_name);
 
                 self.add_pag_edge(
-                    PANodeKind::Operand {
-                        function: Some(function_name.to_string()),
-                        op: src_ptr,
-                    },
-                    PANodeKind::Operand {
-                        function: Some(function_name.to_string()),
-                        op: dst_ptr,
-                    },
+                    self.get_nodekind_for_value_ref(PAValueRef::Operand(src_ptr), function_name),
+                    self.get_nodekind_for_value_ref(PAValueRef::Operand(dst_ptr), function_name),
                     PAEdgeKind::MemCopy,
                     function_name.to_string(),
                     block_name.to_string(),
@@ -713,14 +721,18 @@ impl<'m> PointerAssignmentGraph<'m> {
                     block: block_name.to_string(),
                     name: format!("{}", result),
                     obj_callsite_id: callsite_id,
+                    allocated_type: None,
                 };
 
                 self.add_pag_edge(
                     heap,
-                    PANodeKind::ValueName {
-                        function: function_name.to_string(),
-                        name: result,
-                    },
+                    self.get_nodekind_for_value_ref(
+                        PAValueRef::Name {
+                            name: result,
+                            ty: None,
+                        },
+                        function_name,
+                    ),
                     PAEdgeKind::AddressOf,
                     function_name.to_string(),
                     block_name.to_string(),
@@ -747,14 +759,14 @@ impl<'m> PointerAssignmentGraph<'m> {
 
             if let (Some(self_arg), Some(result)) = (self_arg, result) {
                 self.add_pag_edge(
-                    PANodeKind::Operand {
-                        function: Some(function_name.to_string()),
-                        op: self_arg,
-                    },
-                    PANodeKind::ValueName {
-                        function: function_name.to_string(),
-                        name: result,
-                    },
+                    self.get_nodekind_for_value_ref(PAValueRef::Operand(self_arg), function_name),
+                    self.get_nodekind_for_value_ref(
+                        PAValueRef::Name {
+                            name: result,
+                            ty: None,
+                        },
+                        function_name,
+                    ),
                     PAEdgeKind::AggregateCopy,
                     function_name.to_string(),
                     block_name.to_string(),
@@ -764,10 +776,13 @@ impl<'m> PointerAssignmentGraph<'m> {
                 // String::deref returns { ptr, i64 }; expose the data pointer as field 0
                 if is_string_deref(function_name) {
                     let dst = self.get_or_create_node(
-                        PANodeKind::ValueName {
-                            function: function_name.to_string(),
-                            name: result,
-                        },
+                        self.get_nodekind_for_value_ref(
+                            PAValueRef::Name {
+                                name: result,
+                                ty: None,
+                            },
+                            function_name,
+                        ),
                         caller_context.clone(),
                     );
                     let slot = PANodeKind::AggregateField {
@@ -776,10 +791,10 @@ impl<'m> PointerAssignmentGraph<'m> {
                     };
 
                     self.add_pag_edge(
-                        PANodeKind::Operand {
-                            function: Some(function_name.to_string()),
-                            op: self_arg,
-                        },
+                        self.get_nodekind_for_value_ref(
+                            PAValueRef::Operand(self_arg),
+                            function_name,
+                        ),
                         slot.clone(),
                         PAEdgeKind::AggregateCopy,
                         function_name.to_string(),
@@ -789,10 +804,13 @@ impl<'m> PointerAssignmentGraph<'m> {
 
                     self.add_pag_edge(
                         slot,
-                        PANodeKind::ValueName {
-                            function: function_name.to_string(),
-                            name: result,
-                        },
+                        self.get_nodekind_for_value_ref(
+                            PAValueRef::Name {
+                                name: result,
+                                ty: None,
+                            },
+                            function_name,
+                        ),
                         PAEdgeKind::AddressOf,
                         function_name.to_string(),
                         block_name.to_string(),
@@ -813,14 +831,8 @@ impl<'m> PointerAssignmentGraph<'m> {
                 let src_ptr = &args[1].0;
 
                 self.add_pag_edge(
-                    PANodeKind::Operand {
-                        function: Some(function_name.to_string()),
-                        op: src_ptr,
-                    },
-                    PANodeKind::Operand {
-                        function: Some(function_name.to_string()),
-                        op: out_ptr,
-                    },
+                    self.get_nodekind_for_value_ref(PAValueRef::Operand(src_ptr), function_name),
+                    self.get_nodekind_for_value_ref(PAValueRef::Operand(out_ptr), function_name),
                     PAEdgeKind::MemCopy,
                     function_name.to_string(),
                     block_name.to_string(),
@@ -841,31 +853,6 @@ impl<'m> PointerAssignmentGraph<'m> {
         context: PAContext,
     ) {
         let function_name = func.name.clone();
-
-        // Bind each formal parameter's binding node to its uses in the body.
-        // The call binding writes actuals into `FormalParameter` nodes, but body
-        // uses of a parameter resolve to `ValueName{function, name}` (`ssa::fn::%x`).
-        // Without this bridge the two are different nodes and the incoming
-        // argument value never reaches the callee body (returns/param-uses come
-        // back empty). Created once per (function, context); the body is
-        // discovered under the callee context, so both ends share `context`.
-        for (index, param) in func.parameters.iter().enumerate() {
-            self.add_pag_edge(
-                PANodeKind::FormalParameter {
-                    function: function_name.clone(),
-                    index,
-                    name: format!("{}", param.name),
-                },
-                PANodeKind::ValueName {
-                    function: function_name.clone(),
-                    name: &param.name,
-                },
-                PAEdgeKind::Copy,
-                function_name.clone(),
-                "params".to_string(),
-                context.clone(),
-            );
-        }
 
         let skip = self.compute_cleanup_blocks_with_cfg(func);
 
@@ -888,10 +875,13 @@ impl<'m> PointerAssignmentGraph<'m> {
                             dest: &alloca.dest,
                             allocated_type: &alloca.allocated_type,
                         };
-                        let dst = PANodeKind::ValueName {
-                            function: function_name.clone(),
-                            name: &alloca.dest,
-                        };
+                        let dst = self.get_nodekind_for_value_ref(
+                            PAValueRef::Name {
+                                name: &alloca.dest,
+                                ty: None,
+                            },
+                            &function_name.clone(),
+                        );
 
                         self.add_pag_edge(
                             src,
@@ -904,11 +894,17 @@ impl<'m> PointerAssignmentGraph<'m> {
                     }
 
                     Instruction::Load(load) => {
-                        let src = get_nodekind_for_operand(&load.address, function_name.clone());
-                        let dst = PANodeKind::ValueName {
-                            function: function_name.clone(),
-                            name: &load.dest,
-                        };
+                        let src = self.get_nodekind_for_value_ref(
+                            PAValueRef::Operand(&load.address),
+                            &function_name.clone(),
+                        );
+                        let dst = self.get_nodekind_for_value_ref(
+                            PAValueRef::Name {
+                                name: &load.dest,
+                                ty: Some(load.loaded_ty.clone()),
+                            },
+                            &function_name.clone(),
+                        );
 
                         self.add_pag_edge(
                             src,
@@ -930,8 +926,14 @@ impl<'m> PointerAssignmentGraph<'m> {
                         );
 
                         self.add_pag_edge(
-                            get_nodekind_for_operand(&store.value, function_name.clone()),
-                            get_nodekind_for_operand(&store.address, function_name.clone()),
+                            self.get_nodekind_for_value_ref(
+                                PAValueRef::Operand(&store.value),
+                                &function_name.clone(),
+                            ),
+                            self.get_nodekind_for_value_ref(
+                                PAValueRef::Operand(&store.address),
+                                &function_name.clone(),
+                            ),
                             PAEdgeKind::Store,
                             function_name.clone(),
                             block_name.clone(),
@@ -957,14 +959,17 @@ impl<'m> PointerAssignmentGraph<'m> {
                                 // e.g.,  %42 = getelementptr inbounds i8, ptr %41, i64 8
                                 if let Some(offset) = gep_single_constant_offset(&gep.indices) {
                                     self.add_pag_edge(
-                                        get_nodekind_for_operand(
-                                            &gep.address,
-                                            function_name.clone(),
+                                        self.get_nodekind_for_value_ref(
+                                            PAValueRef::Operand(&gep.address),
+                                            &function_name.clone(),
                                         ),
-                                        PANodeKind::ValueName {
-                                            function: function_name.clone(),
-                                            name: &gep.dest,
-                                        },
+                                        self.get_nodekind_for_value_ref(
+                                            PAValueRef::Name {
+                                                name: &gep.dest,
+                                                ty: None,
+                                            },
+                                            &function_name.clone(),
+                                        ),
                                         PAEdgeKind::ByteOffsetGEP { offset },
                                         function_name.to_string(),
                                         block_name.to_string(),
@@ -982,11 +987,17 @@ impl<'m> PointerAssignmentGraph<'m> {
                                 // %133 = getelementptr inbounds %"core::result::Result<...>::Ok", ptr %_46, i32 0, i32 1
                                 let indices = gep_indices_as_u64(&gep.indices);
                                 self.add_pag_edge(
-                                    get_nodekind_for_operand(&gep.address, function_name.clone()),
-                                    PANodeKind::ValueName {
-                                        function: function_name.clone(),
-                                        name: &gep.dest,
-                                    },
+                                    self.get_nodekind_for_value_ref(
+                                        PAValueRef::Operand(&gep.address),
+                                        &function_name.clone(),
+                                    ),
+                                    self.get_nodekind_for_value_ref(
+                                        PAValueRef::Name {
+                                            name: &gep.dest,
+                                            ty: None,
+                                        },
+                                        &function_name.clone(),
+                                    ),
                                     PAEdgeKind::GEP { indices },
                                     function_name.clone(),
                                     block_name.clone(),
@@ -1013,11 +1024,17 @@ impl<'m> PointerAssignmentGraph<'m> {
                         );
 
                         self.add_pag_edge(
-                            get_nodekind_for_operand(&bitcast.operand, function_name.clone()),
-                            PANodeKind::ValueName {
-                                function: function_name.clone(),
-                                name: &bitcast.dest,
-                            },
+                            self.get_nodekind_for_value_ref(
+                                PAValueRef::Operand(&bitcast.operand),
+                                &function_name.clone(),
+                            ),
+                            self.get_nodekind_for_value_ref(
+                                PAValueRef::Name {
+                                    name: &bitcast.dest,
+                                    ty: None,
+                                },
+                                &function_name.clone(),
+                            ),
                             PAEdgeKind::BitCast,
                             function_name.clone(),
                             block_name.clone(),
@@ -1026,11 +1043,17 @@ impl<'m> PointerAssignmentGraph<'m> {
                     }
 
                     Instruction::AddrSpaceCast(cast) => {
-                        let src = get_nodekind_for_operand(&cast.operand, function_name.clone());
-                        let dst = PANodeKind::ValueName {
-                            function: function_name.clone(),
-                            name: &cast.dest,
-                        };
+                        let src = self.get_nodekind_for_value_ref(
+                            PAValueRef::Operand(&cast.operand),
+                            &function_name.clone(),
+                        );
+                        let dst = self.get_nodekind_for_value_ref(
+                            PAValueRef::Name {
+                                name: &cast.dest,
+                                ty: None,
+                            },
+                            &function_name.clone(),
+                        );
 
                         self.add_pag_edge(
                             src,
@@ -1063,14 +1086,19 @@ impl<'m> PointerAssignmentGraph<'m> {
                     }
 
                     Instruction::Phi(phi) => {
-                        let dst = PANodeKind::ValueName {
-                            function: function_name.clone(),
-                            name: &phi.dest,
-                        };
+                        let dst = self.get_nodekind_for_value_ref(
+                            PAValueRef::Name {
+                                name: &phi.dest,
+                                ty: None,
+                            },
+                            &function_name.clone(),
+                        );
 
                         for (incoming_value, incoming_block) in &phi.incoming_values {
-                            let src =
-                                get_nodekind_for_operand(incoming_value, function_name.clone());
+                            let src = self.get_nodekind_for_value_ref(
+                                PAValueRef::Operand(incoming_value),
+                                &function_name.clone(),
+                            );
                             let kind = format!("phi from {}", incoming_block);
 
                             self.add_pag_edge(
@@ -1085,13 +1113,19 @@ impl<'m> PointerAssignmentGraph<'m> {
                     }
 
                     Instruction::Select(select) => {
-                        let dst = PANodeKind::ValueName {
-                            function: function_name.clone(),
-                            name: &select.dest,
-                        };
+                        let dst = self.get_nodekind_for_value_ref(
+                            PAValueRef::Name {
+                                name: &select.dest,
+                                ty: None,
+                            },
+                            &function_name.clone(),
+                        );
 
                         self.add_pag_edge(
-                            get_nodekind_for_operand(&select.true_value, function_name.clone()),
+                            self.get_nodekind_for_value_ref(
+                                PAValueRef::Operand(&select.true_value),
+                                &function_name.clone(),
+                            ),
                             dst.clone(),
                             PAEdgeKind::Select, // true branch
                             function_name.clone(),
@@ -1100,7 +1134,10 @@ impl<'m> PointerAssignmentGraph<'m> {
                         );
 
                         self.add_pag_edge(
-                            get_nodekind_for_operand(&select.false_value, function_name.clone()),
+                            self.get_nodekind_for_value_ref(
+                                PAValueRef::Operand(&select.false_value),
+                                &function_name.clone(),
+                            ),
                             dst.clone(),
                             PAEdgeKind::Select, // false branch
                             function_name.clone(),
@@ -1113,21 +1150,30 @@ impl<'m> PointerAssignmentGraph<'m> {
                         // %new = insertvalue %old, %val, field
                         let field = indices_as_u64(&insertvalue.indices);
                         let dst = self.get_or_create_node(
-                            PANodeKind::ValueName {
-                                function: function_name.clone(),
-                                name: &insertvalue.dest,
-                            },
+                            self.get_nodekind_for_value_ref(
+                                PAValueRef::Name {
+                                    name: &insertvalue.dest,
+                                    ty: None,
+                                },
+                                &function_name.clone(),
+                            ),
                             context.clone(),
                         );
                         let slot = PANodeKind::AggregateField { origin: dst, field };
 
                         // inherit the other fields from the base aggregate
                         self.add_pag_edge(
-                            get_nodekind_for_operand(&insertvalue.aggregate, function_name.clone()),
-                            PANodeKind::ValueName {
-                                function: function_name.clone(),
-                                name: &insertvalue.dest,
-                            },
+                            self.get_nodekind_for_value_ref(
+                                PAValueRef::Operand(&insertvalue.aggregate),
+                                &function_name.clone(),
+                            ),
+                            self.get_nodekind_for_value_ref(
+                                PAValueRef::Name {
+                                    name: &insertvalue.dest,
+                                    ty: None,
+                                },
+                                &function_name.clone(),
+                            ),
                             PAEdgeKind::AggregateCopy,
                             function_name.clone(),
                             block_name.clone(),
@@ -1136,7 +1182,10 @@ impl<'m> PointerAssignmentGraph<'m> {
 
                         // pts(slot) = pts(%val)
                         self.add_pag_edge(
-                            get_nodekind_for_operand(&insertvalue.element, function_name.clone()),
+                            self.get_nodekind_for_value_ref(
+                                PAValueRef::Operand(&insertvalue.element),
+                                &function_name.clone(),
+                            ),
                             slot.clone(),
                             PAEdgeKind::AggregateCopy,
                             function_name.clone(),
@@ -1147,10 +1196,13 @@ impl<'m> PointerAssignmentGraph<'m> {
                         // %new points to the slot
                         self.add_pag_edge(
                             slot,
-                            PANodeKind::ValueName {
-                                function: function_name.clone(),
-                                name: &insertvalue.dest,
-                            },
+                            self.get_nodekind_for_value_ref(
+                                PAValueRef::Name {
+                                    name: &insertvalue.dest,
+                                    ty: None,
+                                },
+                                &function_name.clone(),
+                            ),
                             PAEdgeKind::AddressOf,
                             function_name.clone(),
                             block_name.clone(),
@@ -1162,14 +1214,17 @@ impl<'m> PointerAssignmentGraph<'m> {
                         // %dst = extractvalue %agg, field
                         let field = indices_as_u64(&extractvalue.indices);
                         self.add_pag_edge(
-                            get_nodekind_for_operand(
-                                &extractvalue.aggregate,
-                                function_name.clone(),
+                            self.get_nodekind_for_value_ref(
+                                PAValueRef::Operand(&extractvalue.aggregate),
+                                &function_name.clone(),
                             ),
-                            PANodeKind::ValueName {
-                                function: function_name.clone(),
-                                name: &extractvalue.dest,
-                            },
+                            self.get_nodekind_for_value_ref(
+                                PAValueRef::Name {
+                                    name: &extractvalue.dest,
+                                    ty: None,
+                                },
+                                &function_name.clone(),
+                            ),
                             PAEdgeKind::ExtractCopy { field },
                             function_name.clone(),
                             block_name.clone(),
@@ -1179,11 +1234,17 @@ impl<'m> PointerAssignmentGraph<'m> {
 
                     Instruction::Trunc(trunc) => {
                         self.add_pag_edge(
-                            get_nodekind_for_operand(&trunc.operand, function_name.clone()),
-                            PANodeKind::ValueName {
-                                function: function_name.clone(),
-                                name: &trunc.dest,
-                            },
+                            self.get_nodekind_for_value_ref(
+                                PAValueRef::Operand(&trunc.operand),
+                                &function_name.clone(),
+                            ),
+                            self.get_nodekind_for_value_ref(
+                                PAValueRef::Name {
+                                    name: &trunc.dest,
+                                    ty: None,
+                                },
+                                &function_name.clone(),
+                            ),
                             PAEdgeKind::Copy,
                             function_name.clone(),
                             block_name.clone(),
@@ -1224,10 +1285,10 @@ impl<'m> PointerAssignmentGraph<'m> {
 
                 llvm_ir::Terminator::Ret(ret) => {
                     if let Some(ret_val) = &ret.return_operand {
-                        let src = PANodeKind::Operand {
-                            function: Some(function_name.clone()),
-                            op: ret_val,
-                        };
+                        let src = self.get_nodekind_for_value_ref(
+                            PAValueRef::Operand(ret_val),
+                            &function_name.clone(),
+                        );
                         let dst = PANodeKind::FunctionReturn {
                             function: func.name.clone(),
                         };
@@ -1310,7 +1371,7 @@ impl<'m> PointerAssignmentGraph<'m> {
         // This lets normal store/copy/GEP edges that use `op` work.
         self.add_pag_edge(
             PANodeKind::GlobalObject { name: global_name },
-            get_nodekind_for_operand(op, function_name.to_string()),
+            self.get_nodekind_for_value_ref(PAValueRef::Operand(op), &function_name),
             PAEdgeKind::AddressOf,
             function_name.to_string(),
             block_name.to_string(),
@@ -1320,11 +1381,8 @@ impl<'m> PointerAssignmentGraph<'m> {
 
     fn infer_node_type(&self, kind: &PANodeKind<'m>) -> Option<llvm_ir::TypeRef> {
         match kind {
-            PANodeKind::Operand { function, op } => operand_type(op),
-
-            PANodeKind::ValueName { function, name } => {
-                self.ssa_types.get(&name_key(name)).cloned().flatten()
-            }
+            PANodeKind::SSAValue { function, name, ty } => ty.clone(),
+            PANodeKind::Constant { op } => operand_type(op),
 
             PANodeKind::AllocaObject { allocated_type, .. } => {
                 Some(allocated_type.clone()).cloned()
@@ -1333,14 +1391,6 @@ impl<'m> PointerAssignmentGraph<'m> {
             PANodeKind::FieldObject { field_type, .. } => field_type.clone(),
 
             PANodeKind::GlobalObject { name } => self.global_types.get(name).cloned(),
-
-            PANodeKind::FormalParameter {
-                function, index, ..
-            } => self
-                .functions_by_name
-                .get(function)
-                .and_then(|f| f.parameters.get(*index))
-                .map(|p| p.ty.clone()),
 
             PANodeKind::FunctionReturn { function } => self
                 .functions_by_name
@@ -1354,6 +1404,40 @@ impl<'m> PointerAssignmentGraph<'m> {
             | PANodeKind::AggregateField { .. }
             | PANodeKind::HeapObject { .. }
             | PANodeKind::FunctionObject { .. } => None,
+        }
+    }
+
+    fn get_nodekind_for_value_ref(
+        &self,
+        value: PAValueRef<'m>,
+        function_name: &str,
+    ) -> PANodeKind<'m> {
+        let function = normalize_function_name(function_name).to_string();
+
+        match value {
+            PAValueRef::Operand(llvm_ir::Operand::LocalOperand { name, ty }) => {
+                PANodeKind::SSAValue {
+                    function: Some(function),
+                    name,
+                    ty: Some(ty.clone()),
+                }
+            }
+
+            PAValueRef::Parameter(param) => PANodeKind::SSAValue {
+                function: Some(function),
+                name: &param.name,
+                ty: Some(param.ty.clone()),
+            },
+
+            PAValueRef::Name { name, ty } => PANodeKind::SSAValue {
+                function: Some(function),
+                name,
+                ty: ty
+                    .clone()
+                    .or_else(|| self.ssa_types.get(&name_key(name)).cloned().flatten()),
+            },
+
+            PAValueRef::Operand(op) => PANodeKind::Constant { op },
         }
     }
 
@@ -1422,13 +1506,12 @@ impl<'m> PointerAssignmentGraph<'m> {
             PANodeKind::FunctionObject { .. }
             | PANodeKind::GlobalObject { .. }
             | PANodeKind::GlobalAddress { .. }
-            | PANodeKind::TableSlot { .. } => PAContext::global(),
+            | PANodeKind::TableSlot { .. }
+            | PANodeKind::Constant { .. } => PAContext::global(),
 
             // SSA values can be context-sensitive only when you are discovering
             // function body under a context.
-            PANodeKind::ValueName { .. }
-            | PANodeKind::Operand { .. }
-            | PANodeKind::FormalParameter { .. }
+            PANodeKind::SSAValue { .. }
             | PANodeKind::FunctionReturn { .. }
             | PANodeKind::FieldObject { .. }
             | PANodeKind::AggregateField { .. } => requested_context.clone(),
@@ -1971,7 +2054,10 @@ impl<'m> PointerAssignmentGraph<'m> {
         // this edge and update callees.
         // ------------------------------------------------------------
         self.add_pag_edge_w_diff_contexts(
-            get_nodekind_for_operand(direct_callee, caller_name.to_string()),
+            self.get_nodekind_for_value_ref(
+                PAValueRef::Operand(direct_callee),
+                &caller_name.clone(),
+            ),
             PANodeKind::IndirectCallTarget {
                 caller: caller_name.to_string(),
                 block: block_name.to_string(),
@@ -1986,7 +2072,7 @@ impl<'m> PointerAssignmentGraph<'m> {
 
         // ------------------------------------------------------------
         // 3. Receiver-based dispatch.
-        //     receiver -[ReceiverCall]-> target
+        //     receiver -[ReceiverCall]-> target (unknown)
         // LLVM IR has no explicit receiver, but Rust/C++ method calls often pass
         // self/this as the first pointer-like argument. We model the first
         // pointer-like argument as receiver for indirect calls only.
@@ -1995,10 +2081,7 @@ impl<'m> PointerAssignmentGraph<'m> {
 
         if let Some((idx, receiver_arg)) = first_pointer_like_non_sret_arg_index(arguments) {
             self.add_pag_edge(
-                PANodeKind::Operand {
-                    function: None,
-                    op: receiver_arg,
-                },
+                self.get_nodekind_for_value_ref(PAValueRef::Operand(receiver_arg), caller_name),
                 PANodeKind::ReceiverObject {
                     caller: normalize_function_name(caller_name).to_string(),
                     block: block_name.to_string(),
@@ -2233,12 +2316,8 @@ impl<'m> PointerAssignmentGraph<'m> {
         for (idx, (actual_arg, _attrs)) in arguments.iter().enumerate() {
             if let Some(formal) = callee.parameters.get(idx) {
                 self.add_pag_edge_w_diff_contexts(
-                    get_nodekind_for_operand(actual_arg, caller_name.to_string()),
-                    PANodeKind::FormalParameter {
-                        function: callee_name.to_string(),
-                        index: idx,
-                        name: format!("{}", formal.name),
-                    },
+                    self.get_nodekind_for_value_ref(PAValueRef::Operand(actual_arg), caller_name),
+                    self.get_nodekind_for_value_ref(PAValueRef::Parameter(formal), callee_name),
                     PAEdgeKind::Copy,
                     caller_name.to_string(),
                     block_name.to_string(),
@@ -2258,18 +2337,11 @@ impl<'m> PointerAssignmentGraph<'m> {
         //
         // if formal_0 exists.
         // ------------------------------------------------------------
-        if let Some((receiver_arg, _attrs)) = arguments
-            .iter()
-            .find(|(arg, _attrs)| operand_is_pointer_like(arg))
-        {
-            if let Some(formal0) = callee.parameters.get(0) {
+        if let Some((self_idx, self_param)) = first_pointer_like_self_parameter(callee) {
+            if let Some((receiver_arg, _attr)) = arguments.get(self_idx) {
                 self.add_pag_edge_w_diff_contexts(
-                    get_nodekind_for_operand(receiver_arg, callee_name.to_string()),
-                    PANodeKind::FormalParameter {
-                        function: callee_name.to_string(),
-                        index: 0,
-                        name: format!("{}", formal0.name),
-                    },
+                    self.get_nodekind_for_value_ref(PAValueRef::Operand(receiver_arg), caller_name),
+                    self.get_nodekind_for_value_ref(PAValueRef::Parameter(self_param), callee_name),
                     PAEdgeKind::Copy,
                     caller_name.to_string(),
                     block_name.to_string(),
@@ -2287,10 +2359,13 @@ impl<'m> PointerAssignmentGraph<'m> {
                 PANodeKind::FunctionReturn {
                     function: callee_name.to_string(),
                 },
-                PANodeKind::ValueName {
-                    function: caller_name.to_string(),
-                    name: result,
-                },
+                self.get_nodekind_for_value_ref(
+                    PAValueRef::Name {
+                        name: *result,
+                        ty: None,
+                    },
+                    caller_name,
+                ),
                 PAEdgeKind::Copy,
                 caller_name.to_string(),
                 block_name.to_string(),
@@ -2351,22 +2426,7 @@ impl<'m> PointerAssignmentGraph<'m> {
         };
 
         // check if any param is %self pointer type
-        let res = callee_func
-            .parameters
-            .iter()
-            .enumerate()
-            .find_map(|(idx, param)| {
-                let is_self = name_key(&param.name) == "self";
-                let is_ptr = type_is_pointer_like(&param.ty);
-
-                if is_self && is_ptr {
-                    Some((idx, param))
-                } else {
-                    None
-                }
-            });
-
-        let Some((self_idx, self_param)) = res else {
+        let Some((self_idx, self_param)) = first_pointer_like_self_parameter(callee_func) else {
             return false;
         };
 
@@ -2387,10 +2447,7 @@ impl<'m> PointerAssignmentGraph<'m> {
 
         // add direct call edge
         self.add_pag_edge(
-            PANodeKind::Operand {
-                function: Some(callee_name),
-                op: receiver_arg,
-            },
+            self.get_nodekind_for_value_ref(PAValueRef::Operand(receiver_arg), &callee_name),
             PANodeKind::ReceiverObject {
                 caller: normalize_function_name(caller_name).to_string(),
                 block: callsite.block.clone(),
@@ -2466,9 +2523,9 @@ impl<'m> PointerAssignmentGraph<'m> {
                     }
 
                     PAEdgeKind::Store => match item.delta {
-                        PAWorkDelta::Src(delta) => self.solve_store_src(edge.src, edge.dst, &delta),
+                        PAWorkDelta::Src(delta) => self.solve_store_src(edge, &delta),
 
-                        PAWorkDelta::Dst(delta) => self.solve_store_dst(edge.src, edge.dst, &delta),
+                        PAWorkDelta::Dst(delta) => self.solve_store_dst(edge, &delta),
 
                         PAWorkDelta::Full => false,
                     },
@@ -2746,16 +2803,29 @@ impl<'m> PointerAssignmentGraph<'m> {
             }
 
             // insert dynamic copy edge
-            self.lhs2edges.entry(src).or_default().push(edge.clone());
+            self.lhs2edges
+                .entry(edge.src)
+                .or_default()
+                .push(edge.clone());
             self.edges.push(edge.clone());
             self.edge_index
                 .insert((edge.src, edge.dst, edge.kind.clone()));
 
-            let seed_delta = self.points_to_snapshot(src);
+            let seed_delta = self.points_to_snapshot(edge.src);
             if !seed_delta.is_empty() {
+                // debug!(
+                // "[PAG Solver] solve_load: create dynamic Copy edge n{} -[Copy]-> n{}    delta={:?}",
+                // edge.src, edge.dst, seed_delta);
+
                 debug!(
-                "[PAG Solver] solve_load: create dynamic Copy edge n{} -[Copy]-> n{}    delta={:?}",
-                obj, dst, seed_delta);
+                    "[PAG Solver] solve_load: create dynamic Copy edge n{} -[Copy]-> n{} seed pts(n{})={:?}; addr=n{} pts(addr)={:?}",
+                    edge.src,
+                    edge.dst,
+                    edge.src,
+                    seed_delta,
+                    src,
+                    self.points_to_snapshot(src),
+                );
 
                 self.worklist.push(PAWorkItem {
                     edge,
@@ -2845,71 +2915,84 @@ impl<'m> PointerAssignmentGraph<'m> {
     /// when pts(dst) changes:
     /// dst newly points to some object obj.
     /// Then the existing src values should flow to obj.
-    fn solve_store_dst(
-        &mut self,
-        src: PANodeId,
-        _dst: PANodeId,
-        dst_delta: &BTreeSet<PANodeId>,
-    ) -> bool {
+    fn solve_store_dst(&mut self, edge: PAEdge, dst_delta: &BTreeSet<PANodeId>) -> bool {
         if dst_delta.is_empty() {
             return false;
         }
 
-        let src_pts = self.points_to_snapshot(src);
-        if src_pts.is_empty() {
-            return false;
-        }
+        let src = edge.src;
+        let dst = edge.dst;
 
-        let mut changed = false;
-
-        for obj in dst_delta {
-            if !self.store_may_write_pointer_value_to_object(src, *obj) {
-                continue;
-            }
-
-            debug!(
-                "[PAG Solver] solve_store (dst): create dynamic Copy edge n{} -[Copy]-> n{}    delta={:?}",
-                src, obj, dst_delta
-            );
-
-            if self.add_points_to_and_enqueue(*obj, &src_pts) {
-                changed = true;
-            }
-        }
-
-        changed
+        let src_objs = self.points_to_snapshot(src);
+        self.materialize_store_dynamic_edges(src, dst_delta, &src_objs, &edge)
     }
 
     /// when pts(src) changes
     /// src has new values, and dst already points to objects.
     /// The already-created copy edges src -> obj will propagate src.diff.
-    fn solve_store_src(
-        &mut self,
-        _src: PANodeId,
-        dst: PANodeId,
-        src_delta: &BTreeSet<PANodeId>,
-    ) -> bool {
+    fn solve_store_src(&mut self, edge: PAEdge, src_delta: &BTreeSet<PANodeId>) -> bool {
         if src_delta.is_empty() {
             return false;
         }
 
-        let dst_pts = self.points_to_snapshot(dst);
+        let src = edge.src;
+        let dst = edge.dst;
 
+        let dst_objs = self.points_to_snapshot(dst);
+        self.materialize_store_dynamic_edges(src, &dst_objs, src_delta, &edge)
+    }
+
+    fn materialize_store_dynamic_edges(
+        &mut self,
+        src: PANodeId,
+        dst_objs: &BTreeSet<PANodeId>,
+        delta: &BTreeSet<PANodeId>,
+        store_edge: &PAEdge,
+    ) -> bool {
         let mut changed = false;
 
-        for obj in dst_pts {
-            if !self.object_may_hold_pointer_value(obj) {
+        for dst_obj in dst_objs {
+            if !self.object_may_hold_pointer_value(*dst_obj) {
                 continue;
             }
 
+            let dyn_edge = PAEdge {
+                src,
+                dst: *dst_obj,
+                kind: PAEdgeKind::Copy,
+                function: store_edge.function.clone(),
+                block: store_edge.block.clone(),
+            };
+
+            if self
+                .edge_index
+                .contains(&(dyn_edge.src, dyn_edge.dst, dyn_edge.kind.clone()))
+            {
+                continue;
+            }
+
+            self.lhs2edges
+                .entry(dyn_edge.src)
+                .or_default()
+                .push(dyn_edge.clone());
+
+            self.edges.push(dyn_edge.clone());
+            self.edge_index
+                .insert((dyn_edge.src, dyn_edge.dst, dyn_edge.kind.clone()));
+
             debug!(
-                "[PAG Solver] solve_store (src): create dynamic Copy edge n{} -[Copy]-> n{}    delta={:?}",
-                obj, dst, src_delta
+                "[PAG Solver] solve_store: create dynamic Copy edge n{} -[Copy]-> n{} delta={:?}",
+                dyn_edge.src, dyn_edge.dst, delta,
             );
 
-            if self.add_points_to_and_enqueue(obj, src_delta) {
-                changed = true;
+            if !delta.is_empty() {
+                self.worklist.push(PAWorkItem {
+                    edge: dyn_edge,
+                    delta: PAWorkDelta::Src(delta.clone()),
+                });
             }
+
+            changed = true;
         }
 
         changed
@@ -3028,8 +3111,8 @@ impl<'m> PointerAssignmentGraph<'m> {
             }
 
             debug!(
-                "[PAG Solver] solve_gep: create field objects: {:?}    delta={:?}",
-                field_obj, delta
+                "[PAG Solver] solve_gep: base n{} indices={:?} -> field n{}; dst=n{}",
+                base_obj, indices, field_obj, dst
             );
 
             out.insert(field_obj);
@@ -3393,7 +3476,7 @@ impl<'m> PointerAssignmentGraph<'m> {
         match &node.kind {
             PANodeKind::AllocaObject { allocated_type, .. } => Some((*allocated_type).clone()),
 
-            PANodeKind::Operand { function, op } => operand_type(op),
+            PANodeKind::SSAValue { function, name, ty } => ty.clone(),
 
             // PANodeKind::DerefOperand(op) => {
             //     let ptr_ty = operand_type(op)?;
@@ -3527,23 +3610,36 @@ impl<'m> PointerAssignmentGraph<'m> {
         };
 
         match &node.kind {
-            // Do not create FieldObject for unknown/non-pointer fields
-            PANodeKind::FieldObject { field_type, .. } => {
-                match field_type {
-                    Some(ty) => type_may_contain_pointer(ty) || type_is_pointer_like(ty),
-                    None => {
-                        // Important performance choice:
-                        // Unknown field type in Rust library internals causes explosion.
-                        // Be conservative only for application objects if needed.
-                        false
-                    }
-                }
+            // Stack/heap/global objects may hold pointer values depending on their type.
+            // If type is unknown, be conservative and allow.
+            PANodeKind::AllocaObject { allocated_type, .. } => {
+                type_may_contain_pointer(allocated_type)
             }
 
-            _ => match node.ty.as_ref() {
-                None => true,
-                Some(ty) => type_may_contain_pointer(ty) || type_is_pointer_like(ty),
-            },
+            PANodeKind::HeapObject { allocated_type, .. } => allocated_type
+                .as_ref()
+                .map(type_may_contain_pointer)
+                .unwrap_or(true),
+
+            PANodeKind::GlobalObject { .. } => true,
+
+            // Critical: field objects can hold pointer values.
+            // If field_type is None, be conservative.
+            PANodeKind::FieldObject { field_type, .. } => field_type
+                .as_ref()
+                .map(type_may_contain_pointer)
+                .unwrap_or(true),
+
+            // These are values/functions, not memory objects that hold contents.
+            PANodeKind::SSAValue { .. }
+            | PANodeKind::Constant { .. }
+            | PANodeKind::FunctionObject { .. }
+            | PANodeKind::FunctionReturn { .. }
+            | PANodeKind::IndirectCallTarget { .. }
+            | PANodeKind::ReceiverObject { .. } => false,
+
+            // adapt if you still have other variants
+            _ => true,
         }
     }
 
@@ -3818,12 +3914,10 @@ impl<'m> PointerAssignmentGraph<'m> {
 
         for node in self.nodes.values() {
             let kind = match &node.kind {
-                PANodeKind::ValueName { .. } => "ValueName",
-                PANodeKind::Operand { .. } => "Operand",
-
+                PANodeKind::SSAValue { .. } => "SSAValue",
+                PANodeKind::Constant { .. } => "Constant",
                 PANodeKind::AllocaObject { .. } => "AllocaObject",
                 PANodeKind::FieldObject { .. } => "FieldObject",
-                PANodeKind::FormalParameter { .. } => "FormalParameter",
                 PANodeKind::FunctionReturn { .. } => "FunctionReturn",
                 PANodeKind::FunctionObject { .. } => "FunctionObject",
                 PANodeKind::ReceiverObject { .. } => "ReceiverObject",
@@ -4545,7 +4639,7 @@ fn type_may_contain_pointer(ty: &llvm_ir::TypeRef) -> bool {
 }
 
 fn type_may_contain_pointer_depth(ty: &llvm_ir::TypeRef, depth: usize) -> bool {
-    if depth > 8 {
+    if depth > 4 {
         return true;
     }
 
@@ -4677,17 +4771,6 @@ fn is_cleanup_block_name(name: &str) -> bool {
     name == "cleanup" || name.starts_with("cleanup.") || name.starts_with("cleanup")
 }
 
-fn get_nodekind_for_operand<'m>(op: &'m llvm_ir::Operand, function_name: String) -> PANodeKind {
-    match op {
-        llvm_ir::Operand::LocalOperand { .. } => PANodeKind::Operand {
-            function: Some(function_name),
-            op,
-        },
-
-        _ => PANodeKind::Operand { function: None, op },
-    }
-}
-
 fn first_pointer_like_non_sret_arg_index(
     args: &[(llvm_ir::Operand, Vec<llvm_ir::function::ParameterAttribute>)],
 ) -> Option<(usize, &Operand)> {
@@ -4709,4 +4792,21 @@ fn arg_has_sret_attr(attrs: &[llvm_ir::function::ParameterAttribute]) -> bool {
     attrs.iter().any(|attr| {
         format!("{:?}", attr).contains("SRet") || format!("{:?}", attr).contains("sret")
     })
+}
+
+fn first_pointer_like_self_parameter(function: &llvm_ir::Function) -> Option<(usize, &Parameter)> {
+    function
+        .parameters
+        .iter()
+        .enumerate()
+        .find_map(|(idx, param)| {
+            let is_self = name_key(&param.name) == "self";
+            let is_ptr = type_is_pointer_like(&param.ty);
+
+            if is_self && is_ptr {
+                Some((idx, param))
+            } else {
+                None
+            }
+        })
 }

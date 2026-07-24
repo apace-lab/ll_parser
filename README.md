@@ -75,6 +75,11 @@ or
 ```bash
 RUSTFLAGS=-Awarnings cargo run -q -- tests/llm_ac_demo.ll --pag=kcfa --k=3
 ```
+or 
+```bash
+RUSTFLAGS=-Awarnings RUST_LOG=ll_parser=debug  cargo run -q -- tests/pag/basic/store_load.ll --pag=kcfa --k=1 2> debug.log
+```
+
 
 
 ### kCFA, kObj, kMix, AFG
