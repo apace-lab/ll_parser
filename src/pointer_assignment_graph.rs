@@ -842,6 +842,31 @@ impl<'m> PointerAssignmentGraph<'m> {
     ) {
         let function_name = func.name.clone();
 
+        // Bind each formal parameter's binding node to its uses in the body.
+        // The call binding writes actuals into `FormalParameter` nodes, but body
+        // uses of a parameter resolve to `ValueName{function, name}` (`ssa::fn::%x`).
+        // Without this bridge the two are different nodes and the incoming
+        // argument value never reaches the callee body (returns/param-uses come
+        // back empty). Created once per (function, context); the body is
+        // discovered under the callee context, so both ends share `context`.
+        for (index, param) in func.parameters.iter().enumerate() {
+            self.add_pag_edge(
+                PANodeKind::FormalParameter {
+                    function: function_name.clone(),
+                    index,
+                    name: format!("{}", param.name),
+                },
+                PANodeKind::ValueName {
+                    function: function_name.clone(),
+                    name: &param.name,
+                },
+                PAEdgeKind::Copy,
+                function_name.clone(),
+                "params".to_string(),
+                context.clone(),
+            );
+        }
+
         let skip = self.compute_cleanup_blocks_with_cfg(func);
 
         for block in &func.basic_blocks {
