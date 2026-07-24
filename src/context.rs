@@ -180,7 +180,7 @@ impl PAContext {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub enum PAContextSelectPolicy {
     /// use our default exclusion list and only apply Global to those functions
     Default,
@@ -253,7 +253,7 @@ impl PAConfig {
             on_the_fly: true,
             context_mode: PAContextMode::KCallSite,
             default_k: k,
-            policy: PAContextSelectPolicy::AppOnly,
+            policy: PAContextSelectPolicy::Default,
             context_signatures: None,
         }
     }

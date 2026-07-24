@@ -69,8 +69,24 @@ with the following flags:
 
 example command:
 ```bash
-cargo run -- examples/llm_ac_demo/llm_ac_demo.ll --pag=afg --api=signatures/llm_api_functions.json --ac=signatures/ac_functions.json
+RUSTFLAGS=-Awarnings cargo run -q -- tests/llm_ac_demo.ll --pag=afg --api=signatures/llm_api_functions.json --ac=signatures/ac_functions.json
 ```
+or 
+```bash
+RUSTFLAGS=-Awarnings cargo run -q -- tests/llm_ac_demo.ll --pag=kcfa --k=3
+```
+
+
+### kCFA, kObj, kMix, AFG
+#### Good to go
+- kCFA: should work fine
+- AFG: currently using callsites, can hit LLM API and AC points from json files
+
+#### Issues for future
+- kObj: we create a `DirectCall` edge for direct calls with callee function and delay the handling of such calls in solver. However, for most cases, `pts(receiver_arg)` never gets anything, then the such direct callees will never be analyzed in solver, leading to many missing functions, nodes and edges. This loses reachability and needs update later. 
+- kMix: since it uses kObj, it has the same issue as kObj here
+
+
 
 
 
@@ -92,6 +108,29 @@ with an llvm-19 rustc:
 cd examples/llm_ac_demo/
 rustc main.rs --crate-name llm_ac_demo --emit=llvm-ir -o llm_ac_demo.ll
 ```
+
+
+
+
+
+
+
+
+
+## speciak handling 
+- `on_the_fly`
+- `skip_cleanup_blocks`
+- `vtable`
+
+
+## special Rust fuctions (in `handle_special_rust_functions`)
+- memcpy (done)
+
+
+
+
+
+
 
 
 
@@ -198,20 +237,6 @@ Caused by:
 ```
 
 then run `cargo update -p indexmap --precise 2.7.1` to downgrade the crate
-
-
-
-
-
-
-## speciak handling 
-- `on_the_fly`
-- `skip_cleanup_blocks`
-- `vtable`
-
-
-## special Rust fuctions (in `handle_special_rust_functions`)
-- memcpy (done)
 
 
 

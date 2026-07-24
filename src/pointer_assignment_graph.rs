@@ -68,14 +68,15 @@ pub enum PANodeKind<'m> {
     ReceiverObject {
         caller: String,
         block: String,
-        callsite: String,
+        callsite_id: usize,
+        self_idx: usize,
     },
 
     /// the target of an indirect call instruction (e.g., a function pointer)
     IndirectCallTarget {
         caller: String,
         block: String,
-        callsite: String,
+        callsite_id: usize,
     },
 
     /// a global object (e.g., a global allocation or a global function)
@@ -95,7 +96,7 @@ pub enum PANodeKind<'m> {
         function: String,
         block: String,
         name: String,
-        obj_callsite: usize, // callsite_id
+        obj_callsite_id: usize,
     },
 }
 
@@ -181,14 +182,25 @@ impl<'m> PANodeKind<'m> {
             Self::ReceiverObject {
                 caller,
                 block,
-                callsite,
-            } => return format!("receiver_object::{}::{}::{}", caller, block, callsite),
+                callsite_id,
+                self_idx,
+            } => {
+                return format!(
+                    "receiver_object::{}::{}::{}::{}",
+                    caller, block, callsite_id, self_idx
+                )
+            }
 
             Self::IndirectCallTarget {
                 caller,
                 block,
-                callsite,
-            } => return format!("indirect_call_target::{}::{}::{}", caller, block, callsite),
+                callsite_id,
+            } => {
+                return format!(
+                    "indirect_call_target::{}::{}::{}",
+                    caller, block, callsite_id
+                )
+            }
 
             Self::GlobalObject { name } => return format!("global_object::{}", name),
 
@@ -206,11 +218,11 @@ impl<'m> PANodeKind<'m> {
                 function,
                 block,
                 name,
-                obj_callsite,
+                obj_callsite_id,
             } => {
                 return format!(
                     "heap_object::{}::{}::{}::{}",
-                    function, block, name, obj_callsite
+                    function, block, name, obj_callsite_id
                 )
             }
         }
@@ -264,11 +276,15 @@ pub enum PAEdgeKind {
     /// dst = select(cond, src_true, src_false)
     Select,
 
-    /// dst = call(src1, src2, ...) function pointer changes the target of the call
+    /// dst = call i32 () %ptr( ... ) function pointer %ptr changes the target of the call
     IndirectCall { callsite_id: usize },
 
-    /// dst = call(src1, src2, ...) receiver pointer changes the target of the call
+    /// dst = call(self, src2, ...) receiver pointer changes the target of the call
     ReceiverCall { callsite_id: usize },
+
+    /// dst = call(self, src2, ...) we know the function name but we have to postpone the solving to obtain objects in pts(self)
+    /// self_idx is the argument index for %self, which is the receiver
+    DirectCall { callsite_id: usize, self_idx: usize },
 
     /// for llvm.memcpy(dst_ptr, src_ptr, size)
     /// edge.src = src pointer
@@ -304,8 +320,8 @@ pub struct PACallSite<'m> {
     pub block: String,
     pub kind: PACallSiteKind<'m>,
 
-    /// true if callee is syntactically know, e.g., call void @"_ZN3stdxxx or %_5 = invoke ptr @"_ZN68_$LTxxx
-    pub is_direct: bool,
+    /// exist when callee is syntactically know, e.g., call void @"_ZN3stdxxx or %_5 = invoke ptr @"_ZN68_$LTxxx
+    pub direct_callee: Option<String>,
 
     /// caller's context
     pub context: PAContext,
@@ -696,7 +712,7 @@ impl<'m> PointerAssignmentGraph<'m> {
                     function: caller_name.to_string(),
                     block: block_name.to_string(),
                     name: format!("{}", result),
-                    obj_callsite: callsite_id,
+                    obj_callsite_id: callsite_id,
                 };
 
                 self.add_pag_edge(
@@ -1151,7 +1167,7 @@ impl<'m> PointerAssignmentGraph<'m> {
                     }
 
                     Instruction::Call(call) => {
-                        self.add_call_edges(
+                        self.add_edges_for_call(
                             &function_name.clone(),
                             &block_name,
                             PACallSiteKind::Call(call),
@@ -1173,7 +1189,7 @@ impl<'m> PointerAssignmentGraph<'m> {
             match &block.term {
                 llvm_ir::terminator::Terminator::Invoke(invoke) => {
                     let function_name = func.name.clone();
-                    self.add_call_edges(
+                    self.add_edges_for_call(
                         &function_name.clone(),
                         &block_name,
                         PACallSiteKind::Invoke(invoke),
@@ -1824,7 +1840,7 @@ impl<'m> PointerAssignmentGraph<'m> {
     /// Indirect call: add PAG edge from function pointer node so callee discovery is re-run when function pointer points-to changes.
     /// Receiver-based call: add PAG edge from receiver pointer node so callee discovery is re-run when receiver points-to changes.
     /// Add actual→formal, return→lhs, and receiver/self edges.
-    fn add_call_edges(
+    fn add_edges_for_call(
         &mut self,
         caller_name: &str,
         block_name: &str,
@@ -1833,62 +1849,31 @@ impl<'m> PointerAssignmentGraph<'m> {
     ) {
         let function_operand = self.callsite_function_operand(&callsite_kind);
         let Some(direct_callee) = function_operand else {
+            debug!(
+                "[PAG] add_call_edges: cannot find function operand for callsite_kind = {:?}",
+                callsite_kind
+            );
             return;
         };
 
-        let direct_callee_name = direct_callee_name(direct_callee);
+        let callee_name = direct_callee_name(direct_callee);
+
         let callsite_id = self.register_callsite(
             caller_name.to_string(),
             block_name.to_string(),
             callsite_kind.clone(),
-            direct_callee_name.is_some(),
+            callee_name.clone(),
             caller_context.clone(),
         );
 
         // ------------------------------------------------------------
         // 1. Direct call: make sure call graph has caller -> callee.
         // ------------------------------------------------------------
-        if let Some(direct_callee_name) = direct_callee_name {
-            // // record a context point if this reachable call site matches a catalog
-            // let point = if let Some((llm, ac)) = self.config.context_signatures.as_ref() {
-            //     crate::context_finder::match_callsite(
-            //         &direct_callee_name,
-            //         caller_name,
-            //         block_name,
-            //         llm,
-            //         ac,
-            //     )
-            // } else {
-            //     None
-            // };
-
-            // if let Some(mut point) = point {
-            //     // record the PAG nodes for this call's args/result so their
-            //     // points-to sets can be resolved after the fixed point
-            //     let args = self.get_callsite_arguments(&callsite_kind);
-            //     for (op, _) in args {
-            //         let n = self.get_or_create_node(
-            //             get_nodekind_for_operand(op, caller_name.to_string()),
-            //             caller_context.clone(),
-            //         );
-            //         point.arg_nodes.push(n);
-            //     }
-            //     if let Some(result) = self.get_callsite_result(&callsite_kind) {
-            //         point.result_node = Some(self.get_or_create_node(
-            //             PANodeKind::ValueName {
-            //                 function: caller_name.to_string(),
-            //                 name: result,
-            //             },
-            //             caller_context.clone(),
-            //         ));
-            //     }
-            //     self.context_points.push(point);
-            // }
-
+        if let Some(callee_name) = callee_name {
             // handle special functions if exists
             // TODO: they are fine with caller_context for now
             if self.handle_special_rust_functions(
-                &direct_callee_name,
+                &callee_name,
                 caller_name,
                 block_name,
                 &callsite_kind,
@@ -1900,13 +1885,28 @@ impl<'m> PointerAssignmentGraph<'m> {
 
             let callee_func = self
                 .functions_by_name
-                .get(normalize_function_name(direct_callee_name.as_str()))
+                .get(normalize_function_name(callee_name.as_str()))
                 .copied();
 
+            // normal flow when context mode is kobj or kmix
+            // we need to postpone the handling of callee to
+            // obtain the receiver object as context in solver later
+            // so we creat an edge here and return
+            if self.create_direct_call_edge(
+                caller_name,
+                block_name,
+                callsite_id,
+                callee_name.clone(),
+                callee_func,
+            ) {
+                return;
+            }
+
+            // normal flow when context mode is insensitive or kcfa
             if let Some(callee_func) = callee_func {
                 let callee_name = callee_func.name.as_str();
                 let callee_context: PAContext =
-                    self.get_callee_context(&direct_callee_name, callsite_id, None);
+                    self.get_callee_context(&callee_name, callsite_id, None);
 
                 self.add_cg_edge(
                     caller_name,
@@ -1927,6 +1927,11 @@ impl<'m> PointerAssignmentGraph<'m> {
                     callee_func,
                     callee_context.clone(),
                 );
+            } else {
+                debug!(
+                    "[PAG] add_edges_for_call: cannot find function with name {} from functions_by_name",
+                    callee_name.clone()
+                );
             }
 
             return;
@@ -1945,7 +1950,7 @@ impl<'m> PointerAssignmentGraph<'m> {
             PANodeKind::IndirectCallTarget {
                 caller: caller_name.to_string(),
                 block: block_name.to_string(),
-                callsite: format!("callsite_{}", callsite_id),
+                callsite_id: callsite_id,
             },
             PAEdgeKind::IndirectCall { callsite_id },
             caller_name.to_string(),
@@ -1963,22 +1968,27 @@ impl<'m> PointerAssignmentGraph<'m> {
         // ------------------------------------------------------------
         let arguments = self.get_callsite_arguments(&callsite_kind);
 
-        if let Some((receiver_arg, _attrs)) = arguments
-            .iter()
-            .find(|(arg, _attrs)| operand_is_pointer_like(arg))
-        {
-            self.add_pag_edge_w_diff_contexts(
-                get_nodekind_for_operand(receiver_arg, caller_name.to_string()),
+        if let Some((idx, receiver_arg)) = first_pointer_like_non_sret_arg_index(arguments) {
+            self.add_pag_edge(
+                PANodeKind::Operand {
+                    function: None,
+                    op: receiver_arg,
+                },
                 PANodeKind::ReceiverObject {
-                    caller: caller_name.to_string(),
+                    caller: normalize_function_name(caller_name).to_string(),
                     block: block_name.to_string(),
-                    callsite: format!("callsite_{}", callsite_id),
+                    callsite_id: callsite_id,
+                    self_idx: idx,
                 },
                 PAEdgeKind::ReceiverCall { callsite_id },
                 caller_name.to_string(),
                 block_name.to_string(),
                 caller_context.clone(),
-                caller_context.clone(),
+            );
+        } else {
+            debug!(
+                "[PAG] ReceiverDispatch: no receiver arg found for callsite {}",
+                callsite_id
             );
         }
 
@@ -2022,6 +2032,16 @@ impl<'m> PointerAssignmentGraph<'m> {
         match kind {
             PACallSiteKind::Call(call) => call.dest.as_ref(),
             PACallSiteKind::Invoke(invoke) => Some(&invoke.result),
+        }
+    }
+
+    fn get_callsite_function_operand(
+        &mut self,
+        kind: &PACallSiteKind<'m>,
+    ) -> Option<&'m llvm_ir::Operand> {
+        match kind {
+            PACallSiteKind::Call(call) => call_function_operand(&call.function),
+            PACallSiteKind::Invoke(invoke) => call_function_operand(&invoke.function),
         }
     }
 
@@ -2086,207 +2106,83 @@ impl<'m> PointerAssignmentGraph<'m> {
         callsite_id: usize,
         receiver_obj_id: Option<PANodeId>,
     ) -> PAContext {
+        if self.config.context_mode == PAContextMode::Insensitive || self.config.default_k == 0 {
+            return PAContext::global();
+        }
+
         let Some(callsite) = self.callsites.get(&callsite_id) else {
             panic!("cannot find callsite for callsite_id = {}", callsite_id);
         };
 
         let caller_name = &callsite.caller.clone();
         let block_name = &callsite.block.clone();
-        let caller_context = &callsite.context.clone();
+        let caller_context = &callsite.context;
+        let mut callee_context = caller_context.clone().filtered_for_mode(&self.config);
 
-        let callee_context = match self.config.context_mode {
-            PAContextMode::Insensitive => PAContext::Global,
-            PAContextMode::KCallSite => match self.config.policy {
-                PAContextSelectPolicy::Default => {
-                    let callee_context = caller_context.clone();
-
-                    if should_skip_function_context(callee_name) {
-                        return callee_context;
-                    }
-
-                    // create a new context based on caller_context
-                    let callee_context = callee_context.push_with_config(
-                        self.get_callsite_context_elem(caller_name, block_name, callsite_id),
-                        &self.config,
-                    );
-
-                    debug!(
-                        "[PAG] select context (default): function {} -> context {:?}",
-                        callee_name, callee_context
-                    );
-
-                    return callee_context;
-                }
-
-                PAContextSelectPolicy::AppOnly => {
-                    if self.app_crate.is_empty() || self.is_from_app_crate(callee_name) {
-                        // create a new context based on caller_context
-                        let callee_context = caller_context.clone().push_with_config(
-                            self.get_callsite_context_elem(caller_name, block_name, callsite_id),
-                            &self.config,
-                        );
-
-                        debug!(
-                            "[PAG] select context (app-only): function {} -> context {:?}",
-                            callee_name, callee_context
-                        );
-
-                        return callee_context;
-                    } else {
-                        debug!(
-                            "[PAG] select global context (app-only): function {}",
-                            callee_name
-                        );
-
-                        return PAContext::global();
-                    }
-                }
-
-                // TODO: move to KMixed
-                PAContextSelectPolicy::AFG => {
-                    // TODO: do we need so complex matching?
-                    let matched = if let Some((llm, ac)) = self.config.context_signatures.as_ref() {
-                        crate::context_finder::match_callsite(
-                            callee_name,
-                            caller_name, // this is not used
-                            block_name,  // this is not used
-                            llm,
-                            ac,
-                        )
-                    } else {
-                        None
-                    };
-
-                    let callee_context = caller_context.clone();
-
-                    if matched.is_some() {
-                        // create a new context based on caller_context
-                        callee_context.push_with_config(
-                            self.get_callsite_context_elem(caller_name, block_name, callsite_id),
-                            &self.config,
-                        );
-                    }
-
-                    return callee_context;
-                }
-            },
-
-            // TODO: we may need to use receiver_obj's type as filter, not callee_name
-            PAContextMode::KObject => {
-                let Some(receiver_obj) = receiver_obj_id else {
-                    debug!("no receiver_obj_id for receiver-dispatched call.");
-                    return caller_context.clone();
+        // use context policy, see PAContextSelectPolicy
+        let create = match self.config.policy {
+            PAContextSelectPolicy::Default => !should_skip_function_context(callee_name),
+            PAContextSelectPolicy::AppOnly => {
+                self.app_crate.is_empty() || self.is_from_app_crate(callee_name)
+            }
+            PAContextSelectPolicy::AFG => {
+                // TODO: do we need so complex matching?
+                let matched = if let Some((llm, ac)) = self.config.context_signatures.as_ref() {
+                    crate::context_finder::match_callsite(
+                        callee_name,
+                        caller_name, // this is not used
+                        block_name,  // this is not used
+                        llm,
+                        ac,
+                    )
+                } else {
+                    None
                 };
 
-                match self.config.policy {
-                    PAContextSelectPolicy::Default => {
-                        let callee_context = caller_context.clone();
-
-                        if should_skip_function_context(callee_name) {
-                            return callee_context;
-                        }
-
-                        let Some(ctx) = self.get_object_context_elem(receiver_obj) else {
-                            return callee_context;
-                        };
-
-                        // create a new context based on caller_context
-                        callee_context.push_with_config(ctx, &self.config)
-                    }
-
-                    PAContextSelectPolicy::AppOnly => {
-                        if self.app_crate.is_empty() || self.is_from_app_crate(callee_name) {
-                            let Some(ctx) = self.get_object_context_elem(receiver_obj) else {
-                                return caller_context.clone();
-                            };
-
-                            // create a new context based on caller_context
-                            let callee_context =
-                                caller_context.clone().push_with_config(ctx, &self.config);
-
-                            debug!(
-                                "[PAG] select context (app-only): function {} -> context {:?}",
-                                callee_name, callee_context
-                            );
-
-                            return callee_context;
-                        } else {
-                            return caller_context.clone();
-                        }
-                    }
-                    PAContextSelectPolicy::AFG => {
-                        // TODO: the settign should not reach here; always return global here
-                        return PAContext::Global;
-                    }
-                }
-            }
-
-            PAContextMode::KMixed => match self.config.policy {
-                PAContextSelectPolicy::Default => {
-                    if should_skip_function_context(callee_name) {
-                        return caller_context.clone();
-                    }
-
-                    // 1. create a new context based on callsite
-                    let callee_context = caller_context.clone().push_with_config(
-                        self.get_callsite_context_elem(caller_name, block_name, callsite_id),
-                        &self.config,
+                if let Some(context_point) = matched.clone() {
+                    println!(
+                        "[AFG] hit context = {} with category = {:?} through strategy = {}",
+                        context_point.matched_fn_name,
+                        context_point.category,
+                        context_point.strategy
                     );
-
-                    // 2. Selectively append receiver object.
-                    if let Some(receiver_obj) = receiver_obj_id {
-                        let Some(ctx) = self.get_object_context_elem(receiver_obj) else {
-                            return callee_context;
-                        };
-
-                        return callee_context.push_with_config(ctx, &self.config);
-                    }
-
-                    callee_context
                 }
-                PAContextSelectPolicy::AppOnly => {
-                    // TODO:
-                    return PAContext::Global;
-                }
-                PAContextSelectPolicy::AFG => {
-                    let matched = if let Some((llm, ac)) = self.config.context_signatures.as_ref() {
-                        crate::context_finder::match_callsite(
-                            callee_name,
-                            caller_name, // this is not used
-                            block_name,  // this is not used
-                            llm,
-                            ac,
-                        )
-                    } else {
-                        None
-                    };
 
-                    let callee_context = caller_context.clone();
-
-                    // 1. create a new context based on callsite
-                    if matched.is_some() {
-                        callee_context.push_with_config(
-                            self.get_callsite_context_elem(caller_name, block_name, callsite_id),
-                            &self.config,
-                        );
-                    }
-
-                    // 2. Selectively append receiver object.
-                    // TODO: we need a filter here to only consider user input obj
-                    if let Some(receiver_obj) = receiver_obj_id {
-                        let Some(ctx) = self.get_object_context_elem(receiver_obj) else {
-                            return callee_context;
-                        };
-
-                        callee_context.push_with_config(ctx, &self.config);
-                    }
-
-                    return callee_context;
-                }
-            },
+                matched.is_some()
+            }
         };
 
-        return callee_context;
+        // For KCFA / KMixed
+        if create {
+            let elem = self.get_callsite_context_elem(caller_name, block_name, callsite_id);
+            callee_context = callee_context.push_with_config(elem, &self.config);
+        }
+
+        // For Kobj / KMixed.
+        if let Some(receiver_obj) = receiver_obj_id {
+            // TODO: we may need to use receiver_obj's type as filter, not just callee_name
+            if create {
+                if let Some(elem) = self.get_object_context_elem(receiver_obj) {
+                    callee_context = callee_context.push_with_config(elem, &self.config);
+                }
+            }
+        } else {
+            debug!("no receiver_obj_id for receiver-dispatched call.");
+        };
+
+        debug!(
+            "[PAG] select context: function {} -> context {:?}",
+            callee_name, callee_context
+        );
+
+        if create && self.config.policy == PAContextSelectPolicy::AFG {
+            println!(
+                "[AFG] select context: function {} -> context {:?}",
+                callee_name, callee_context
+            )
+        }
+
+        callee_context.filtered_for_mode(&self.config)
     }
 
     fn is_from_app_crate(&self, function_name: &str) -> bool {
@@ -2399,6 +2295,93 @@ impl<'m> PointerAssignmentGraph<'m> {
         }
 
         false
+    }
+
+    /// create DirectCall edge when using kobj or kmix only
+    fn create_direct_call_edge(
+        &mut self,
+        caller_name: &str,
+        block_name: &str,
+        callsite_id: usize,
+        callee_name: String,
+        callee_func: Option<&Function>,
+    ) -> bool {
+        if !matches!(
+            self.config.context_mode,
+            PAContextMode::KObject | PAContextMode::KMixed
+        ) {
+            return false;
+        }
+
+        let Some(callsite) = self.callsites.get(&callsite_id).cloned() else {
+            panic!("cannot find callsite with id = {}", callsite_id);
+        };
+
+        let Some(callee_func) = callee_func else {
+            debug!(
+                "[PAG] create_direct_call_edge: cannot find function with name {} from functions_by_name",
+                callee_name
+            );
+            return false;
+        };
+
+        // check if any param is %self pointer type
+        let res = callee_func
+            .parameters
+            .iter()
+            .enumerate()
+            .find_map(|(idx, param)| {
+                let is_self = name_key(&param.name) == "self";
+                let is_ptr = type_is_pointer_like(&param.ty);
+
+                if is_self && is_ptr {
+                    Some((idx, param))
+                } else {
+                    None
+                }
+            });
+
+        let Some((self_idx, self_param)) = res else {
+            return false;
+        };
+
+        debug!(
+            "[PAG] direct call: found %self ptr = {:?} for function = {}",
+            self_param, callee_name
+        );
+
+        let args = self.get_callsite_arguments(&callsite.kind);
+        let Some((receiver_arg, _attrs)) = args.get(self_idx) else {
+            println!(
+                "cannot find receiver argument with idx = {} in callsite = {:?}",
+                self_idx,
+                callsite.clone(),
+            );
+            return false;
+        };
+
+        // add direct call edge
+        self.add_pag_edge(
+            PANodeKind::Operand {
+                function: Some(callee_name),
+                op: receiver_arg,
+            },
+            PANodeKind::ReceiverObject {
+                caller: normalize_function_name(caller_name).to_string(),
+                block: callsite.block.clone(),
+                callsite_id: callsite.id,
+                self_idx,
+            },
+            PAEdgeKind::DirectCall {
+                callsite_id,
+                self_idx,
+            },
+            caller_name.to_string(),
+            block_name.to_string(),
+            callsite.context.clone(),
+        );
+
+        true
     }
 
     ///////////////// solvers below this point /////////////////
@@ -2527,6 +2510,17 @@ impl<'m> PointerAssignmentGraph<'m> {
                         };
 
                         self.solve_receiver_call(edge, callsite_id, &delta)
+                    }
+
+                    PAEdgeKind::DirectCall {
+                        callsite_id,
+                        self_idx,
+                    } => {
+                        let PAWorkDelta::Src(delta) = item.delta else {
+                            continue;
+                        };
+
+                        self.solve_direct_call(callsite_id, self_idx, &delta)
                     }
 
                     PAEdgeKind::MemCopy => match item.delta {
@@ -3123,7 +3117,7 @@ impl<'m> PointerAssignmentGraph<'m> {
             return false;
         };
 
-        if callsite.is_direct {
+        if callsite.direct_callee.is_some() {
             return false;
         }
 
@@ -3185,7 +3179,7 @@ impl<'m> PointerAssignmentGraph<'m> {
         };
 
         // TODO: aggressively skip discovering receiver-dispatch calls: this might be wrong for polymophism
-        if callsite.is_direct {
+        if callsite.direct_callee.is_some() {
             debug!(
                 "[PAG Solver] skip receiver resolution for direct callsite: {:?}",
                 callsite
@@ -3231,6 +3225,64 @@ impl<'m> PointerAssignmentGraph<'m> {
                     callee_context,
                 );
             }
+        }
+
+        changed
+    }
+
+    fn solve_direct_call(
+        &mut self,
+        callsite_id: usize,
+        self_idx: usize,
+        delta: &BTreeSet<PANodeId>,
+    ) -> bool {
+        if delta.is_empty() {
+            return false;
+        }
+
+        let Some(callsite) = self.callsites.get(&callsite_id).cloned() else {
+            return false;
+        };
+
+        let Some(callee_name) = callsite.direct_callee.clone() else {
+            return false;
+        };
+
+        let callee_name = normalize_function_name(&callee_name);
+
+        let Some(callee_func) = self.functions_by_name.get(callee_name).cloned() else {
+            return false;
+        };
+
+        let mut changed = false;
+
+        for receiver_obj in delta {
+            let callee_context =
+                self.get_callee_context(&callee_name, callsite_id, Some(*receiver_obj));
+
+            if self.add_cg_edge(
+                &callsite.caller.clone(),
+                callsite.context.clone(),
+                callee_name,
+                callee_context.clone(),
+            ) {
+                println!(
+                    "[PAG Solver] direct call discovered: {} -> {}",
+                    callsite.caller, callee_name
+                );
+
+                self.enqueue_reachable_function(&callee_name, callee_context.clone());
+                changed = true;
+            }
+
+            self.add_constraints_for_call(
+                &callsite.caller,
+                callsite.context.clone(),
+                &callsite.block,
+                callsite.kind,
+                callee_func,
+                callee_context,
+            );
         }
 
         changed
@@ -3331,7 +3383,7 @@ impl<'m> PointerAssignmentGraph<'m> {
         caller: String,
         block: String,
         call: PACallSiteKind<'m>,
-        is_direct: bool,
+        direct_callee: Option<String>,
         context: PAContext,
     ) -> usize {
         let id = self.next_callsite_id;
@@ -3344,7 +3396,7 @@ impl<'m> PointerAssignmentGraph<'m> {
                 caller,
                 block,
                 kind: call,
-                is_direct,
+                direct_callee,
                 context,
             },
         );
@@ -3618,11 +3670,12 @@ impl<'m> PointerAssignmentGraph<'m> {
         self.print_node_context_statistics();
         // self.print_vtable_function_refs();
 
-        if self.config.context_signatures.is_some() {
-            let _ = self.print_context_points();
-            println!("=== Context Statistics ===");
-            println!("context points: {}", self.context_points().len());
-        }
+        // if self.config.context_signatures.is_some() {
+        //     let _ = self.print_context_points();
+        //     println!();
+        //     println!("=== Context Statistics ===");
+        //     println!("context points: {}", self.context_points().len());
+        // }
         println!()
     }
 
@@ -3709,6 +3762,7 @@ impl<'m> PointerAssignmentGraph<'m> {
                 PAEdgeKind::Select => "Select",
                 PAEdgeKind::IndirectCall { .. } => "IndirectCall",
                 PAEdgeKind::ReceiverCall { .. } => "ReceiverCall",
+                PAEdgeKind::DirectCall { .. } => "DirectCall",
                 PAEdgeKind::MemCopy => "MemCopy",
                 PAEdgeKind::AggregateCopy => "AggregateCopy",
                 PAEdgeKind::ExtractCopy { .. } => "ExtractCopy",
@@ -4607,4 +4661,27 @@ fn get_nodekind_for_operand<'m>(op: &'m llvm_ir::Operand, function_name: String)
 
         _ => PANodeKind::Operand { function: None, op },
     }
+}
+
+fn first_pointer_like_non_sret_arg_index(
+    args: &[(llvm_ir::Operand, Vec<llvm_ir::function::ParameterAttribute>)],
+) -> Option<(usize, &Operand)> {
+    args.iter().enumerate().find_map(|(idx, (arg, attrs))| {
+        if arg_has_sret_attr(attrs) {
+            return None;
+        }
+
+        let ty = operand_type(arg)?;
+        if type_is_pointer_like(&ty) {
+            Some((idx, arg))
+        } else {
+            None
+        }
+    })
+}
+
+fn arg_has_sret_attr(attrs: &[llvm_ir::function::ParameterAttribute]) -> bool {
+    attrs.iter().any(|attr| {
+        format!("{:?}", attr).contains("SRet") || format!("{:?}", attr).contains("sret")
+    })
 }
