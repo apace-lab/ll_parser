@@ -533,7 +533,16 @@ impl<'m> PointerAssignmentGraph<'m> {
             }
 
             pag.pending_functions
-                .push_back((main_name, PAContext::global()));
+                .push_back((main_name.clone(), PAContext::global()));
+
+            // Entry-point seeding: framework-dispatched handlers (axum/actix
+            // .route(..).post(handler), spawned closures, etc.) are invoked by the
+            // runtime, not reached from main, so their bodies -- and the LLM/AC
+            // calls inside them -- would never be analyzed. Seed every app-crate,
+            // non-skipped function as a Global root so those handlers are reached.
+            // The skip-list keeps std/tokio out, so this stays bounded.
+            let seed_crate = parse_app_crate(&main_name);
+            pag.seed_app_crate_entry_points(&seed_crate);
         } else {
             println!("[PAG] warning: cannot find main function; no constraints discovered");
             return pag;
@@ -1829,6 +1838,39 @@ impl<'m> PointerAssignmentGraph<'m> {
             PACallSiteKind::Call(call) => call_function_operand(&call.function),
             PACallSiteKind::Invoke(invoke) => call_function_operand(&invoke.function),
         }
+    }
+
+    /// Seed every app-crate, non-skipped function as a Global root so that
+    /// framework-dispatched entry points (HTTP handlers, spawned closures) that
+    /// are unreachable from `main` still get analyzed. Bounded by the skip-list
+    /// (std/tokio stay out) and by the app crate (deps stay out).
+    fn seed_app_crate_entry_points(&mut self, app_crate: &str) {
+        if app_crate.is_empty() {
+            println!("[PAG] entry-point seeding skipped (no app crate)");
+            return;
+        }
+        let roots: Vec<String> = self
+            .functions_by_name
+            .keys()
+            .filter(|name| name.contains(app_crate) && !should_skip_function_body(name))
+            .cloned()
+            .collect();
+
+        let mut seeded = 0usize;
+        for name in roots {
+            let key = (name.clone(), PAContext::global());
+            if self.visited_functions.contains(&key)
+                || self.pending_functions.iter().any(|x| x == &key)
+            {
+                continue;
+            }
+            self.pending_functions.push_back(key);
+            seeded += 1;
+        }
+        println!(
+            "[PAG] seeded {} app-crate entry-point roots (crate {:?})",
+            seeded, app_crate
+        );
     }
 
     /// push newly discovered callee to pending_functions if not exist
