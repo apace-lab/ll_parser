@@ -4,7 +4,7 @@ use std::error::Error;
 use std::fs::File;
 use std::io::Write;
 
-use ll_parser::ModuleAnalysis;
+use ll_parser::{CrossModuleAnalysis, ModuleAnalysis};
 
 fn has_flag(args: &[String], flag: &str) -> bool {
     args.iter().any(|arg| arg == flag)
@@ -111,38 +111,62 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("default")).init();
 
-    let input_ll = &args[1];
-
-    // a single module
-    let module = Module::from_ir_path(input_ll)
-        .map_err(|e| format!("failed to parse LLVM IR file: {}", e))?;
-    println!("Parsed LLVM IR from: {}", input_ll);
-
-    // optionally write the parsed module for debugging
-    if has_flag(&args, "--info") {
-        let output_txt = "parsed_module.txt";
-        write_module_to_file(&module, output_txt)?;
-        println!("Wrote parsed module info to: {}", output_txt);
+    // positional args (not starting with "--") are input .ll paths; accept one or many.
+    // multiple inputs are analyzed together as a cross-module program (e.g. a crate's
+    // lib + bin, where `main` is in the bin but most code is in the lib).
+    let inputs: Vec<&String> = args[1..].iter().filter(|a| !a.starts_with("--")).collect();
+    if inputs.is_empty() {
+        eprintln!("Usage:");
+        eprintln!(
+            "  {} <input.ll> [more.ll ...] [--pag=<mode>] [--k=N] [--api=..] [--ac=..] [--info] [--cfg] [--cg]",
+            args[0]
+        );
+        std::process::exit(1);
     }
 
-    let mut analysis = ModuleAnalysis::new(&module);
+    let mut modules: Vec<Module> = Vec::with_capacity(inputs.len());
+    for input_ll in &inputs {
+        let module = Module::from_ir_path(input_ll)
+            .map_err(|e| format!("failed to parse LLVM IR file {}: {}", input_ll, e))?;
+        println!("Parsed LLVM IR from: {}", input_ll);
+        modules.push(module);
+    }
 
-    // print cfg for each function: default from llvm-ir
+    // optionally write the parsed module(s) for debugging
+    if has_flag(&args, "--info") {
+        for (i, module) in modules.iter().enumerate() {
+            let output_txt = if modules.len() == 1 {
+                "parsed_module.txt".to_string()
+            } else {
+                format!("parsed_module_{}.txt", i)
+            };
+            write_module_to_file(module, &output_txt)?;
+            println!("Wrote parsed module info to: {}", output_txt);
+        }
+    }
+
+    // print cfg for each function, per module: default from llvm-ir
     if has_flag(&args, "--cfg") {
         let mut file = std::fs::File::create("cfg.txt")?;
-        for func in &module.functions {
-            let fn_analysis = analysis.fn_analysis(&func.name);
-            let cfg = fn_analysis.control_flow_graph();
-
-            cfg.print_cfg(&func.name, &mut file)?;
+        for module in &modules {
+            let analysis = ModuleAnalysis::new(module);
+            for func in &module.functions {
+                let fn_analysis = analysis.fn_analysis(&func.name);
+                fn_analysis
+                    .control_flow_graph()
+                    .print_cfg(&func.name, &mut file)?;
+            }
         }
         println!("Wrote control flow graph to cfg.txt");
     }
 
-    // print cg: default from llvm-ir
+    // cross-module analysis over all input modules (works for a single module too)
+    let mut analysis = CrossModuleAnalysis::new(modules.iter());
+
+    // print cg (cross-module): default from llvm-ir
     if has_flag(&args, "--cg") {
         let _ = analysis.call_graph().print_call_graph();
-        println!("Wrote pointer assignment graph to cg.txt");
+        println!("Wrote call graph to cg.txt");
     }
 
     // generate pag (records context points during the analysis if catalogs were set)
