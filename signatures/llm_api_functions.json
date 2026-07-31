@@ -6,6 +6,45 @@
         "self_convention": "For methods, the receiver (&self / &mut self) is included as the first entry of parameter_type, matching the convention used in rust_input_functions.json for Tabby's chat/chat_stream."
     },
 
+    "hub": [
+        {
+            "fn_name": "hub_lib::ai_models::instance::ModelInstance::chat_completions",
+            "return_type": "Result<ChatCompletionResponse, ApiError>",
+            "parameter_type": ["&self", "ChatCompletionRequest"],
+            "verified_via": "hub e1be468 src/ai_models/instance.rs (direct choke point; delegates to Arc<dyn Provider>)"
+        },
+        {
+            "fn_name": "hub_lib::ai_models::instance::ModelInstance::completions",
+            "return_type": "Result<CompletionResponse, ApiError>",
+            "parameter_type": ["&self", "CompletionRequest"],
+            "verified_via": "hub e1be468 src/ai_models/instance.rs"
+        },
+        {
+            "fn_name": "hub_lib::ai_models::instance::ModelInstance::embeddings",
+            "return_type": "Result<EmbeddingsResponse, ApiError>",
+            "parameter_type": ["&self", "EmbeddingsRequest"],
+            "verified_via": "hub e1be468 src/ai_models/instance.rs"
+        },
+        {
+            "fn_name": "hub_lib::providers::provider::Provider::chat_completions",
+            "return_type": "Result<ChatCompletionResponse, ApiError>",
+            "parameter_type": ["&self", "ChatCompletionRequest", "&ProviderConfig"],
+            "verified_via": "hub e1be468 src/providers/provider.rs (trait method; virtual dispatch)"
+        },
+        {
+            "fn_name": "hub_lib::providers::provider::Provider::completions",
+            "return_type": "Result<CompletionResponse, ApiError>",
+            "parameter_type": ["&self", "CompletionRequest", "&ProviderConfig"],
+            "verified_via": "hub e1be468 src/providers/provider.rs"
+        },
+        {
+            "fn_name": "hub_lib::providers::provider::Provider::embeddings",
+            "return_type": "Result<EmbeddingsResponse, ApiError>",
+            "parameter_type": ["&self", "EmbeddingsRequest", "&ProviderConfig"],
+            "verified_via": "hub e1be468 src/providers/provider.rs"
+        }
+    ],
+
     "async-openai": [
         {
             "fn_name": "async_openai::chat::Chat::create",
