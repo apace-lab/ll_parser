@@ -4359,7 +4359,10 @@ fn gep_single_constant_offset(indices: &[llvm_ir::Operand]) -> Option<i64> {
     if indices.len() == 1 {
         if let Some(idx) = indices.get(0) {
             if let Some(offset) = const_int_operand_as_u64(idx) {
-                return Some(offset.try_into().unwrap());
+                // u64 -> i64 as a two's-complement reinterpret: a negative byte
+                // offset comes through as a large u64, so try_into().unwrap() would
+                // panic (seen on LLVM-20 IR). `as i64` is the correct wrap here.
+                return Some(offset as i64);
             }
         }
     }
