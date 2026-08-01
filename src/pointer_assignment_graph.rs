@@ -590,6 +590,41 @@ impl<'m> PointerAssignmentGraph<'m> {
         None
     }
 
+    /// Seed every app-crate, non-skipped function as a Global root so that
+    /// framework-dispatched entry points (HTTP handlers, spawned closures) that
+    /// are unreachable from `main` still get analyzed. Bounded by the skip-list
+    /// (std/tokio stay out) and by the app crate (deps stay out).
+    fn seed_app_crate_entry_points(&mut self, app_crate: &str) {
+        if app_crate.is_empty() {
+            println!("[PAG] entry-point seeding skipped (no app crate)");
+            return;
+        }
+
+        let roots: Vec<String> = self
+            .functions_by_name
+            .keys()
+            .filter(|name| name.contains(app_crate) && !should_skip_function_body(name))
+            .cloned()
+            .collect();
+
+        let mut seeded = 0usize;
+        for name in roots {
+            let key = (name.clone(), PAContext::global());
+            if self.visited_functions.contains(&key)
+                || self.pending_functions.iter().any(|x| x == &key)
+            {
+                continue;
+            }
+            self.pending_functions.push_back(key);
+            seeded += 1;
+        }
+
+        println!(
+            "[PAG] seeded {} app-crate non-main entry-points (from crate {:?})",
+            seeded, app_crate
+        );
+    }
+
     pub fn discover_reachable_constraints(&mut self) {
         while let Some((function_name, context)) = self.pending_functions.pop_front() {
             let key = (function_name.clone(), context.clone());
@@ -1838,39 +1873,6 @@ impl<'m> PointerAssignmentGraph<'m> {
             PACallSiteKind::Call(call) => call_function_operand(&call.function),
             PACallSiteKind::Invoke(invoke) => call_function_operand(&invoke.function),
         }
-    }
-
-    /// Seed every app-crate, non-skipped function as a Global root so that
-    /// framework-dispatched entry points (HTTP handlers, spawned closures) that
-    /// are unreachable from `main` still get analyzed. Bounded by the skip-list
-    /// (std/tokio stay out) and by the app crate (deps stay out).
-    fn seed_app_crate_entry_points(&mut self, app_crate: &str) {
-        if app_crate.is_empty() {
-            println!("[PAG] entry-point seeding skipped (no app crate)");
-            return;
-        }
-        let roots: Vec<String> = self
-            .functions_by_name
-            .keys()
-            .filter(|name| name.contains(app_crate) && !should_skip_function_body(name))
-            .cloned()
-            .collect();
-
-        let mut seeded = 0usize;
-        for name in roots {
-            let key = (name.clone(), PAContext::global());
-            if self.visited_functions.contains(&key)
-                || self.pending_functions.iter().any(|x| x == &key)
-            {
-                continue;
-            }
-            self.pending_functions.push_back(key);
-            seeded += 1;
-        }
-        println!(
-            "[PAG] seeded {} app-crate entry-point roots (crate {:?})",
-            seeded, app_crate
-        );
     }
 
     /// push newly discovered callee to pending_functions if not exist

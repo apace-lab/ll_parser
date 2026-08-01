@@ -5,6 +5,13 @@ Small hand-written .ll fixtures for ll_parser's pointer analysis. Two groups:
 kcfa vs insensitive behaviour). Each .ll also has its expected answer in the
 header comment. This file is how to run them and what to expect.
 
+
+
+### how to run
+`cargo test -- --nocapture --test-threads=1`
+
+
+
 ## Why the fixtures look like Rust IR
 
 ll_parser was built for Rust-compiled IR, so the fixtures imitate it:
