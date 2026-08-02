@@ -1906,87 +1906,6 @@ impl<'m> PointerAssignmentGraph<'m> {
             .push_back((callee_name, callee_context));
     }
 
-    // fn enqueue_vtable_targets_containing_function_pattern(&mut self, pattern: &str) {
-    //     let mut candidate_globals = Vec::new();
-
-    //     for (func, globals) in &self.function2vtable {
-    //         if func.contains(pattern) {
-    //             candidate_globals.extend(globals.iter().cloned());
-    //         }
-    //     }
-
-    //     candidate_globals.sort();
-    //     candidate_globals.dedup();
-
-    //     let mut targets = Vec::new();
-
-    //     for global in candidate_globals {
-    //         if let Some(refs) = self.vtable2function.get(&global) {
-    //             debug!(
-    //                 "[PAG reachability] global {} selected by pattern {}, refs={:?}",
-    //                 global, pattern, refs
-    //             );
-
-    //             for r in refs {
-    //                 if !r.contains("drop_in_place") {
-    //                     targets.push(r.clone());
-    //                 }
-    //             }
-    //         }
-    //     }
-
-    //     targets.sort();
-    //     targets.dedup();
-
-    //     for target in targets {
-    //         self.enqueue_reachable_function(&target);
-    //     }
-    // }
-
-    /// find potential closure function running in a thread spawn and enqueue it
-    fn enqueue_spawn_unchecked_closures(&mut self, target_context: PAContext) {
-        let mut targets = Vec::new();
-
-        for name in self.functions_by_name.keys() {
-            if is_spawn_unchecked_closure(name) {
-                targets.push(name.clone());
-            }
-        }
-
-        targets.sort();
-        targets.dedup();
-
-        for target in targets {
-            debug!(
-                "[PAG reachability] enqueue spawn_unchecked closure summary target: {}",
-                target
-            );
-
-            // TODO: this is a shot-cut context
-            self.enqueue_reachable_function(&target, target_context.clone());
-        }
-    }
-
-    /// heuristics here:
-    /// seen from demo.ll @vtable.2
-    /// the path to the target closure goes through a vtable / function-pointer callback / thread wrapper, not only direct calls.
-    /// we skip that many relations, directly bound them
-    fn maybe_apply_thread_spawn_summary(&mut self, callee_name: &str, callee_context: PAContext) {
-        let callee_name = normalize_function_name(callee_name);
-
-        if callee_name.contains("_ZN3std6thread7Builder16spawn_unchecked_")
-            || callee_name.contains("_ZN3std6thread7Builder15spawn_unchecked")
-            || callee_name.contains("_ZN3std6thread5spawn")
-        {
-            debug!(
-                "[PAG reachability] applying thread-spawn closure summary for {}",
-                callee_name
-            );
-
-            self.enqueue_spawn_unchecked_closures(callee_context);
-        }
-    }
-
     /// this function does the following:
     /// Direct call: check/add call edge in call_graph.
     /// Indirect call: add PAG edge from function pointer node so callee discovery is re-run when function pointer points-to changes.
@@ -2066,8 +1985,6 @@ impl<'m> PointerAssignmentGraph<'m> {
                     callee_name,
                     callee_context.clone(),
                 );
-
-                self.maybe_apply_thread_spawn_summary(callee_name, callee_context.clone());
 
                 self.enqueue_reachable_function(callee_name, callee_context.clone());
 
