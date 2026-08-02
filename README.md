@@ -12,6 +12,8 @@ https://github.com/cdisselkoen/llvm-ir-taint
 `sudo apt install zlib1g-dev`
 
 We use llvm 19.1.7 (the most recent version supported by llvm-ir) and rustup 1.82.0 (the compatible version)
+ -> rustc 1.86.0 → LLVM 19.1.7
+ -> rustc 1.87.0 → LLVM 20.1.1
 
 however, llvm 17 (the most recent version supported by llvm-ir-analysis) and rustup 1.77.x (the compatible version) are kind of outdated ... 
 

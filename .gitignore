@@ -1,8 +1,5 @@
 *.log
 *.txt
 target
-examples/*
-!examples/llm_ac_demo
-!examples/llm_ac_demo/**
 taint_config.json
 tests/chatgpt_lencx.ll
