@@ -4,21 +4,26 @@
 //! For a more thorough introduction to the crate and how to get started,
 //! see the [crate's README](https://github.com/cdisselkoen/llvm-ir-analysis/blob/main/README.md).
 
+mod afg_engine;
 mod call_graph;
 mod context;
-pub mod context_finder;
 mod control_dep_graph;
 mod control_flow_graph;
 mod dominator_tree;
 mod functions_by_type;
 mod pointer_assignment_graph;
+// mod security_analysis;
+// mod security_facts;
+pub mod signature;
 
+use crate::afg_engine::AFGContextEngine;
 pub use crate::call_graph::CallGraph;
 pub use crate::control_dep_graph::ControlDependenceGraph;
 pub use crate::control_flow_graph::{CFGNode, ControlFlowGraph};
 pub use crate::dominator_tree::{DominatorTree, PostDominatorTree};
 pub use crate::functions_by_type::FunctionsByType;
 pub use crate::pointer_assignment_graph::{PAEdge, PANode, PointerAssignmentGraph};
+// pub use crate::security_analysis::SecurityAnalysis;
 use llvm_ir::{Function, Module};
 use log::debug;
 use std::cell::{Ref, RefCell};
@@ -42,10 +47,9 @@ pub struct ModuleAnalysis<'m> {
     /// Map from function name to the `FunctionAnalysis` for that function
     fn_analyses: HashMap<&'m str, FunctionAnalysis<'m>>,
     /// optional (llm, access-control) catalogs used to record context points
-    context_catalogs: Option<(
-        Vec<context_finder::Signature>,
-        Vec<context_finder::Signature>,
-    )>,
+    context_catalogs: Option<(Vec<signature::Signature>, Vec<signature::Signature>)>,
+    /// optional AFG engine for the module, which can be used to detect potential leaks of sensitive information from LLM API calls to access-control sinks
+    afg_engine: SimpleCache<AFGContextEngine<'m>>,
 }
 
 impl<'m> ModuleAnalysis<'m> {
@@ -65,6 +69,7 @@ impl<'m> ModuleAnalysis<'m> {
                 .map(|f| (f.name.as_str(), FunctionAnalysis::new(f)))
                 .collect(),
             context_catalogs: None,
+            afg_engine: SimpleCache::new(),
         }
     }
 
@@ -72,8 +77,8 @@ impl<'m> ModuleAnalysis<'m> {
     /// context points for matched call sites. Call before `pointer_assignment_graph`.
     pub fn set_context_catalogs(
         &mut self,
-        llm: Vec<context_finder::Signature>,
-        ac: Vec<context_finder::Signature>,
+        llm: Vec<signature::Signature>,
+        ac: Vec<signature::Signature>,
     ) {
         self.context_catalogs = Some((llm, ac));
     }
@@ -112,6 +117,11 @@ impl<'m> ModuleAnalysis<'m> {
         })
     }
 
+    // pub fn afg_engine(&self, pag: &'m PointerAssignmentGraph) -> Ref<'_, AFGContextEngine<'m>> {
+    //     self.afg_engine
+    //         .get_or_insert_with(|| AFGContextEngine::new(&pag))
+    // }
+
     /// Get the `FunctionsByType` for the `Module`.
     pub fn functions_by_type(&self) -> Ref<FunctionsByType<'m>> {
         self.functions_by_type.get_or_insert_with(|| {
@@ -146,10 +156,9 @@ pub struct CrossModuleAnalysis<'m> {
     /// Map from module name to the `ModuleAnalysis` for that module
     module_analyses: HashMap<&'m str, ModuleAnalysis<'m>>,
     /// optional (llm, access-control) catalogs used to record context points
-    context_catalogs: Option<(
-        Vec<context_finder::Signature>,
-        Vec<context_finder::Signature>,
-    )>,
+    context_catalogs: Option<(Vec<signature::Signature>, Vec<signature::Signature>)>,
+    /// optional AFG engine for the module, which can be used to detect potential leaks of sensitive information from LLM API calls to access-control sinks
+    afg_engine: SimpleCache<AFGContextEngine<'m>>,
 }
 
 impl<'m> CrossModuleAnalysis<'m> {
@@ -171,6 +180,7 @@ impl<'m> CrossModuleAnalysis<'m> {
             functions_by_type: SimpleCache::new(),
             module_analyses,
             context_catalogs: None,
+            afg_engine: SimpleCache::new(),
         }
     }
 
@@ -178,8 +188,8 @@ impl<'m> CrossModuleAnalysis<'m> {
     /// context points for matched call sites. Call before `pointer_assignment_graph`.
     pub fn set_context_catalogs(
         &mut self,
-        llm: Vec<context_finder::Signature>,
-        ac: Vec<context_finder::Signature>,
+        llm: Vec<signature::Signature>,
+        ac: Vec<signature::Signature>,
     ) {
         self.context_catalogs = Some((llm, ac));
     }
@@ -225,6 +235,13 @@ impl<'m> CrossModuleAnalysis<'m> {
             )
         })
     }
+
+    // pub fn afg_engine(&self, mode: &str, k: Option<usize>) -> Ref<'_, AFGContextEngine<'m>> {
+    //     self.afg_engine.get_or_insert_with(move || {
+    //         let pag = self.pointer_assignment_graph(mode, k);
+    //         AFGContextEngine::new(&pag)
+    //     })
+    // }
 
     /// Get the `FunctionsByType` for the `Module`(s).
     pub fn functions_by_type(&self) -> Ref<FunctionsByType<'m>> {

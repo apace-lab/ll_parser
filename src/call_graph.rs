@@ -7,17 +7,18 @@ use llvm_ir::{
 };
 use petgraph::prelude::*;
 
+use petgraph::Direction;
+use std::collections::{HashMap, VecDeque};
 use std::error::Error;
 use std::fs::File;
 use std::io::Write;
-
-use petgraph::Direction;
 
 /// The call graph for the analyzed `Module`(s): which functions may call which
 /// other functions.
 ///
 /// To construct a `CallGraph`, use [`ModuleAnalysis`](struct.ModuleAnalysis.html)
 /// or [`CrossModuleAnalysis`](struct.CrossModuleAnalysis.html).
+#[derive(Clone, Debug)]
 pub struct CallGraph<'m> {
     /// the call graph itself. Nodes are function names, and an edge from F to G
     /// indicates F may call G
@@ -160,6 +161,83 @@ impl<'m> CallGraph<'m> {
         self.graph.add_edge(caller, callee, ());
 
         true
+    }
+
+    pub fn is_reachable(&self, caller: &str, callee: &str) -> bool {
+        petgraph::algo::has_path_connecting(&self.graph, caller, callee, None)
+    }
+
+    /// Finds the closest common caller/ancestor of `left` and `right`.
+    ///
+    /// For edges `caller -> callee`, this traverses incoming edges from both
+    /// target functions. The returned function can reach both targets.
+    ///
+    /// Selection priority:
+    /// 1. Minimize max(distance_to_left, distance_to_right).
+    /// 2. Minimize distance_to_left + distance_to_right.
+    /// 3. Lexicographic function name for deterministic output.
+    pub fn find_closest_common_root(&self, left: &str, right: &str) -> Option<&'m str> {
+        let left_node = self.find_node(left)?;
+        let right_node = self.find_node(right)?;
+
+        let left_ancestors = self.backward_distances(left_node);
+
+        let right_ancestors = self.backward_distances(right_node);
+
+        left_ancestors
+            .iter()
+            .filter_map(|(&candidate, &left_distance)| {
+                let right_distance = *right_ancestors.get(candidate)?;
+
+                Some((
+                    candidate,
+                    left_distance.max(right_distance),
+                    left_distance + right_distance,
+                ))
+            })
+            .min_by(
+                |(left_name, left_max, left_sum), (right_name, right_max, right_sum)| {
+                    left_max
+                        .cmp(right_max)
+                        .then_with(|| left_sum.cmp(right_sum))
+                        .then_with(|| left_name.cmp(right_name))
+                },
+            )
+            .map(|(candidate, _, _)| candidate)
+    }
+
+    /// Resolves an externally supplied function name to the graph's stored
+    /// `&'m str`, avoiding any lifetime connection to the input `&str`.
+    fn find_node(&self, function_name: &str) -> Option<&'m str> {
+        self.graph.nodes().find(|node| *node == function_name)
+    }
+
+    /// Returns every function that can reach `start`, along with its shortest
+    /// call-graph distance to `start`.
+    ///
+    /// `start` itself has distance zero.
+    fn backward_distances(&self, start: &'m str) -> HashMap<&'m str, usize> {
+        let mut distances = HashMap::new();
+        let mut worklist = VecDeque::new();
+
+        distances.insert(start, 0);
+        worklist.push_back(start);
+
+        while let Some(current) = worklist.pop_front() {
+            let current_distance = distances[&current];
+
+            for caller in self.graph.neighbors_directed(current, Direction::Incoming) {
+                if distances.contains_key(caller) {
+                    continue;
+                }
+
+                distances.insert(caller, current_distance + 1);
+
+                worklist.push_back(caller);
+            }
+        }
+
+        distances
     }
 
     pub fn print_call_graph(&self) -> Result<(), Box<dyn Error>> {

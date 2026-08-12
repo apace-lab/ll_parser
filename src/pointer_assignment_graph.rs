@@ -1,15 +1,20 @@
+use crate::afg_engine::SemanticPoint;
+use crate::afg_engine::SemanticPointKind;
 use crate::call_graph::CallGraph;
 use crate::context::{
     PAConfig, PAContext, PAContextElem, PAContextMode, PAContextSelectPolicy, PAObjectContextKind,
 };
-use crate::context_finder::{ContextKind, ContextPoint, Signature};
+use crate::signature::{SecurityPoint, Signature};
+use crate::AFGContextEngine;
 use crate::ControlFlowGraph;
 use crate::FunctionsByType;
 use core::panic;
 use llvm_ir::function::Parameter;
+use llvm_ir::function::ParameterAttribute;
 use llvm_ir::instruction::{InlineAssembly, Instruction};
 use llvm_ir::{Constant, ConstantRef, Function, Module, Name, Operand, Type, TypeRef};
 use log::debug;
+use petgraph::csr;
 use rustc_demangle::demangle;
 use std::collections::{BTreeMap, BTreeSet, HashMap, VecDeque};
 use std::error::Error;
@@ -386,11 +391,10 @@ pub struct PointerAssignmentGraph<'m> {
     // our created cg when on-the-fy, otherwise import from llvm-ir
     pub call_graph: CallGraph<'m>,
 
-    pub edges: Vec<PAEdge>,
-
     /// (src, dst, kind) of every edge in `edges`, for O(log n) duplicate checks
     /// instead of an O(E) linear scan over `edges` on each insertion
     pub edge_index: BTreeSet<(PANodeId, PANodeId, PAEdgeKind)>,
+    pub edges: Vec<PAEdge>,
 
     /// callsite id -> PACallSite
     pub callsites: BTreeMap<usize, PACallSite<'m>>,
@@ -425,14 +429,14 @@ pub struct PointerAssignmentGraph<'m> {
 
     pub config: PAConfig,
 
-    /// record call sites matched against the catalogs context_signatures
-    pub context_points: Vec<ContextPoint>,
-
     /// crate name of the entry (main) module; used for selective context: only
     /// application functions carry a call context, library/runtime plumbing
     /// (std/core/alloc/tokio/...) stays context-insensitive (Global) to avoid
     /// the (function, context) instantiation blow-up. empty => gate disabled.
     pub app_crate: String,
+
+    /// for AFG, the engine to record functions
+    pub semantic_points: Vec<SemanticPoint>,
 }
 
 impl<'m> PointerAssignmentGraph<'m> {
@@ -517,8 +521,8 @@ impl<'m> PointerAssignmentGraph<'m> {
             store_dst_edges: BTreeMap::new(),
             memcpy_dst_edges: BTreeMap::new(),
             config: config,
-            context_points: Vec::new(),
             app_crate: String::new(),
+            semantic_points: Vec::new(),
         };
 
         if let Some(main_name) = pag.find_main_function_name() {
@@ -572,6 +576,12 @@ impl<'m> PointerAssignmentGraph<'m> {
         );
 
         pag.print_statistics();
+
+        if pag.config.policy == PAContextSelectPolicy::AFG {
+            let mut engine = AFGContextEngine::new(&pag);
+            engine.run();
+            engine.print_result();
+        }
 
         pag
     }
@@ -670,55 +680,17 @@ impl<'m> PointerAssignmentGraph<'m> {
         }
     }
 
-    /// compute the cleanup basicblocks and its successors that do not have normal incoming control flow edges
-    /// return a set of basicblock names that need to skip
-    fn compute_cleanup_blocks_with_cfg(&mut self, func: &llvm_ir::Function) -> BTreeSet<String> {
-        let cfg: ControlFlowGraph<'_> = ControlFlowGraph::new(func);
-
-        let mut skip = BTreeSet::new();
-        let mut worklist = VecDeque::new();
-
-        for bb in &func.basic_blocks {
-            let name = normalize_block_label(&format!("{}", &bb.name));
-            if is_cleanup_block_name(&name) {
-                if skip.insert(name.clone()) {
-                    worklist.push_back(name);
-                }
-            }
-        }
-
-        while let Some(block_name) = worklist.pop_front() {
-            let name = Name::Name(Box::new(block_name));
-            for succ in cfg.succs(&name) {
-                let succ = normalize_block_label(&format!("{}", succ));
-
-                if skip.insert(succ.clone()) {
-                    worklist.push_back(succ);
-                }
-            }
-        }
-
-        skip
-    }
-
     /// TODO: handle special rust functions, e.g., clone()
+    /// most functions we handled here does not have a function in function_by_type/name
     pub fn handle_special_rust_functions(
         &mut self,
-        function_name: &str,
+        function_name: &str, //callee
         caller_name: &str,
         block_name: &str,
         callsite_kind: &PACallSiteKind<'m>,
         callsite_id: usize,
         caller_context: PAContext,
     ) -> bool {
-        // // <alloc::sync::Arc<T, A> as core::clone::Clone>::clone
-        // //
-        // if is_arc_clone(function_name) {}
-        // let func = self
-        //     .functions_by_name
-        //     .get(normalize_function_name(function_name))
-        //     .copied();
-
         // model:
         // declare void @llvm.memcpy.p0.p0.i64(ptr nocapture writeonly %dst,  // The starting address of the destination memory block.
         //                            ptr nocapture readonly %src,             // The starting address of the source memory block.
@@ -735,17 +707,17 @@ impl<'m> PointerAssignmentGraph<'m> {
                 let dst_ptr = &args[0].0;
                 let src_ptr = &args[1].0;
 
-                // self.add_global_address_if_needed(dst_ptr, function_name, block_name);
-                // self.add_global_address_if_needed(src_ptr, function_name, block_name);
-
-                self.add_pag_edge(
-                    self.get_nodekind_for_value_ref(PAValueRef::Operand(src_ptr), function_name),
-                    self.get_nodekind_for_value_ref(PAValueRef::Operand(dst_ptr), function_name),
+                let (src_id, dst_id) = self.add_pag_edge(
+                    self.get_nodekind_for_value_ref(PAValueRef::Operand(src_ptr), caller_name),
+                    self.get_nodekind_for_value_ref(PAValueRef::Operand(dst_ptr), caller_name),
                     PAEdgeKind::MemCopy,
-                    function_name.to_string(),
+                    caller_name.to_string(),
                     block_name.to_string(),
                     caller_context.clone(),
                 );
+
+                // println!("[PAG] handling memcpy from caller = {}", caller_name);
+                // println!("[PAG] src id = {}, dst id = {}", src_id, dst_id);
 
                 debug!(
                     "[PAG] model llvm.memcpy as MemCopy: src={:?} dst={:?}",
@@ -775,10 +747,10 @@ impl<'m> PointerAssignmentGraph<'m> {
                             name: result,
                             ty: None,
                         },
-                        function_name,
+                        caller_name,
                     ),
                     PAEdgeKind::AddressOf,
-                    function_name.to_string(),
+                    caller_name.to_string(),
                     block_name.to_string(),
                     caller_context.clone(),
                 );
@@ -794,7 +766,7 @@ impl<'m> PointerAssignmentGraph<'m> {
 
         // smart-pointer deref: the result aliases the self argument
         // <T as core::ops::deref::Deref>::deref(self) -> &T
-        if is_smart_pointer_deref(function_name) {
+        if is_deref(function_name) {
             let self_arg = self
                 .get_callsite_arguments(&callsite_kind)
                 .first()
@@ -803,16 +775,16 @@ impl<'m> PointerAssignmentGraph<'m> {
 
             if let (Some(self_arg), Some(result)) = (self_arg, result) {
                 self.add_pag_edge(
-                    self.get_nodekind_for_value_ref(PAValueRef::Operand(self_arg), function_name),
+                    self.get_nodekind_for_value_ref(PAValueRef::Operand(self_arg), caller_name),
                     self.get_nodekind_for_value_ref(
                         PAValueRef::Name {
                             name: result,
                             ty: None,
                         },
-                        function_name,
+                        caller_name,
                     ),
                     PAEdgeKind::AggregateCopy,
-                    function_name.to_string(),
+                    caller_name.to_string(),
                     block_name.to_string(),
                     caller_context.clone(),
                 );
@@ -825,7 +797,7 @@ impl<'m> PointerAssignmentGraph<'m> {
                                 name: result,
                                 ty: None,
                             },
-                            function_name,
+                            caller_name,
                         ),
                         caller_context.clone(),
                     );
@@ -835,13 +807,10 @@ impl<'m> PointerAssignmentGraph<'m> {
                     };
 
                     self.add_pag_edge(
-                        self.get_nodekind_for_value_ref(
-                            PAValueRef::Operand(self_arg),
-                            function_name,
-                        ),
+                        self.get_nodekind_for_value_ref(PAValueRef::Operand(self_arg), caller_name),
                         slot.clone(),
                         PAEdgeKind::AggregateCopy,
-                        function_name.to_string(),
+                        caller_name.to_string(),
                         block_name.to_string(),
                         caller_context.clone(),
                     );
@@ -853,10 +822,10 @@ impl<'m> PointerAssignmentGraph<'m> {
                                 name: result,
                                 ty: None,
                             },
-                            function_name,
+                            caller_name,
                         ),
                         PAEdgeKind::AddressOf,
-                        function_name.to_string(),
+                        caller_name.to_string(),
                         block_name.to_string(),
                         caller_context.clone(),
                     );
@@ -864,6 +833,65 @@ impl<'m> PointerAssignmentGraph<'m> {
             }
 
             return true;
+        }
+
+        // <alloc::sync::Arc<T, A> as core::clone::Clone>::clone
+        // may have return value or sret
+        // normal return:
+        //      clone(self) -> result
+        // sret:
+        //      clone(sret_result, self)
+        if is_clone(function_name) {
+            let args = self.get_callsite_arguments(callsite_kind);
+
+            let (self_operand, result_kind) = match args.len() {
+                // normal return:
+                // %r = call @Clone::clone(%self)
+                1 => {
+                    let Some(result) = self.get_callsite_result(callsite_kind) else {
+                        return true;
+                    };
+                    let self_operand = &args[0].0;
+                    let result_kind = self.get_nodekind_for_value_ref(
+                        PAValueRef::Name {
+                            name: result,
+                            ty: None,
+                        },
+                        caller_name,
+                    );
+
+                    (self_operand, result_kind)
+                }
+
+                // sret:
+                // call @Clone::clone(%result, %self)
+                2 => {
+                    let result_operand = &args[0].0;
+                    let self_operand = &args[1].0;
+
+                    let result_kind = self.get_nodekind_for_value_ref(
+                        PAValueRef::Operand(result_operand),
+                        caller_name,
+                    );
+
+                    (self_operand, result_kind)
+                }
+
+                _ => return true,
+            };
+
+            let self_kind =
+                self.get_nodekind_for_value_ref(PAValueRef::Operand(self_operand), caller_name);
+
+            self.add_pag_edge_w_diff_contexts(
+                self_kind,
+                result_kind,
+                PAEdgeKind::Copy,
+                caller_name.to_string(),
+                block_name.to_string(),
+                caller_context.clone(),
+                caller_context.clone(),
+            );
         }
 
         // core::option::Option<&T>::cloned(sret out, opt): copy contents opt -> out
@@ -1398,7 +1426,7 @@ impl<'m> PointerAssignmentGraph<'m> {
             // );
         } else {
             // GlobalObject(@g) -[AddressOf]-> GlobalAddress(@g)
-            self.add_pag_edge(
+            let (src_id, dst_id) = self.add_pag_edge(
                 PANodeKind::GlobalObject {
                     name: clean_name.clone(),
                 },
@@ -1408,12 +1436,14 @@ impl<'m> PointerAssignmentGraph<'m> {
                 block_name.to_string(),
                 context.clone(),
             );
+
+            debug!("[PAG] add_global_address_if_needed: create global pag edge: src={} -[AddressOf]-> dst={} ", src_id, dst_id);
         }
 
         // GlobalAddress(@g/@f) -[Copy]-> Operand(ptr @g/@f)
         //
         // This lets normal store/copy/GEP edges that use `op` work.
-        self.add_pag_edge(
+        let (src_id, dst_id) = self.add_pag_edge(
             PANodeKind::GlobalObject { name: global_name },
             self.get_nodekind_for_value_ref(PAValueRef::Operand(op), &function_name),
             PAEdgeKind::AddressOf,
@@ -1421,6 +1451,8 @@ impl<'m> PointerAssignmentGraph<'m> {
             block_name.to_string(),
             context.clone(),
         );
+
+        debug!("[PAG] add_global_address_if_needed: create global pag edge: src={} -[AddressOf]-> dst={} ", src_id, dst_id);
     }
 
     fn infer_node_type(&self, kind: &PANodeKind<'m>) -> Option<llvm_ir::TypeRef> {
@@ -1451,6 +1483,7 @@ impl<'m> PointerAssignmentGraph<'m> {
         }
     }
 
+    /// TODO: skip creating nodes for xxx.debug.spill.xxx
     fn get_nodekind_for_value_ref(
         &self,
         value: PAValueRef<'m>,
@@ -1523,11 +1556,22 @@ impl<'m> PointerAssignmentGraph<'m> {
             id
         );
         self.next_node_id += 1; // keep track of the node size
-
         self.nodes.insert(id, node);
         self.node_ids.insert(key, id);
 
         id
+    }
+
+    pub fn get_node_by_id(&self, id: PANodeId) -> Option<PANode> {
+        let node = self.nodes.get(&id);
+        let Some(node) = node else {
+            println!("[PAG] get_node_by_id: cannot find node with id = {}", id);
+            return None;
+        };
+
+        println!("[PAG] get_node_by_id: find id = {} -> node = {}", id, node);
+
+        Some(node.clone())
     }
 
     /// policy for whether apply context on a node
@@ -1806,6 +1850,7 @@ impl<'m> PointerAssignmentGraph<'m> {
 
     /// create pag nodes (if not exist) and add the corresponding pag edge if not exist
     /// nodes have the same context
+    /// -> (PANodeId, PANodeId)
     fn add_pag_edge(
         &mut self,
         src_kind: PANodeKind<'m>,
@@ -1814,15 +1859,18 @@ impl<'m> PointerAssignmentGraph<'m> {
         function: String,
         block: String,
         context: PAContext,
-    ) {
+    ) -> (PANodeId, PANodeId) {
         let src = self.get_or_create_node(src_kind, context.clone());
         let dst = self.get_or_create_node(dst_kind, context);
 
         self.create_and_indert_pag_edge(kind, src, dst, function, block);
+
+        (src, dst)
     }
 
     /// for creating and adding pag nodes and edges of function call's parameters and return values
     /// they require different contexts
+    /// return (src id, dst id)
     fn add_pag_edge_w_diff_contexts(
         &mut self,
         src_kind: PANodeKind<'m>,
@@ -1832,24 +1880,58 @@ impl<'m> PointerAssignmentGraph<'m> {
         block: String,
         src_context: PAContext, // caller context
         dst_context: PAContext, // callee context
-    ) {
+    ) -> (PANodeId, PANodeId) {
         let src = self.get_or_create_node(src_kind, src_context);
         let dst = self.get_or_create_node(dst_kind, dst_context);
 
         self.create_and_indert_pag_edge(kind, src, dst, function, block);
+
+        (src, dst)
     }
 
+    // fn nodes_are_copy_compatible(&self, src: PANodeId, dst: PANodeId) -> bool {
+    //     let src_ty = self.nodes.get(&src).and_then(|n| n.ty.as_ref());
+    //     let dst_ty = self.nodes.get(&dst).and_then(|n| n.ty.as_ref());
+
+    //     match (src_ty, dst_ty) {
+    //         (Some(src_ty), Some(dst_ty)) => {
+    //             type_is_pointer_like(src_ty) && type_is_pointer_like(dst_ty)
+    //         }
+
+    //         // Unknown type: do not reject.
+    //         (None, _) | (_, None) => true,
+    //     }
+    // }
+
     fn nodes_are_copy_compatible(&self, src: PANodeId, dst: PANodeId) -> bool {
-        let src_ty = self.nodes.get(&src).and_then(|n| n.ty.as_ref());
-        let dst_ty = self.nodes.get(&dst).and_then(|n| n.ty.as_ref());
+        let Some(src_node) = self.nodes.get(&src) else {
+            return true;
+        };
+        let Some(dst_node) = self.nodes.get(&dst) else {
+            return true;
+        };
+
+        let src_ty = src_node.ty.as_ref();
+        let dst_ty = dst_node.ty.as_ref();
 
         match (src_ty, dst_ty) {
             (Some(src_ty), Some(dst_ty)) => {
-                type_is_pointer_like(src_ty) && type_is_pointer_like(dst_ty)
+                if type_is_pointer_like(src_ty) && type_is_pointer_like(dst_ty) {
+                    return true;
+                }
+
+                if type_is_pointer_like(dst_ty) {
+                    if let PANodeKind::Constant { op } = &src_node.kind {
+                        if is_global_reference_constant(op) {
+                            return true;
+                        }
+                    }
+                }
+
+                false
             }
 
-            // Unknown type: do not reject.
-            (None, _) | (_, None) => true,
+            _ => true,
         }
     }
 
@@ -1906,6 +1988,79 @@ impl<'m> PointerAssignmentGraph<'m> {
             .push_back((callee_name, callee_context));
     }
 
+    /// simple heuristics to link return value and argument together  
+    /// when we cannot find function body in function_by_names/types
+    /// TODO: we only handle llm related apis here
+    fn handle_bodyless_call(
+        &mut self,
+        callee_name: &str,
+        callsite_kind: &PACallSiteKind<'m>,
+        caller_name: &str,
+        block_name: &str,
+        caller_context: &PAContext,
+    ) -> bool {
+        if !is_llm_api_function(callee_name) {
+            return false;
+        }
+
+        let arguments = self.get_callsite_arguments(callsite_kind);
+
+        // Case 1:
+        // call void @foo(ptr sret(...) %dst, ptr %src)
+        //
+        // Model:
+        // %src --Copy--> %dst
+        if arguments.len() == 2 {
+            if let Some((sret_idx, sret)) = first_pointer_like_sret_arg(arguments) {
+                let src_idx = if sret_idx == 0 { 1 } else { 0 };
+
+                let (sret_arg, _) = &arguments[sret_idx];
+                let (src_arg, _) = &arguments[src_idx];
+
+                self.add_pag_edge(
+                    self.get_nodekind_for_value_ref(PAValueRef::Operand(src_arg), caller_name),
+                    self.get_nodekind_for_value_ref(PAValueRef::Operand(sret_arg), caller_name),
+                    PAEdgeKind::Copy,
+                    caller_name.to_string(),
+                    block_name.to_string(),
+                    caller_context.clone(),
+                );
+
+                return true;
+            }
+        }
+
+        // Case 2:
+        // %result = call @foo(%arg)
+        //
+        // Model:
+        // %arg --Copy--> %result
+        if arguments.len() == 1 {
+            if let Some(result) = self.get_callsite_result(callsite_kind) {
+                let (arg, _) = &arguments[0];
+
+                self.add_pag_edge(
+                    self.get_nodekind_for_value_ref(PAValueRef::Operand(arg), caller_name),
+                    self.get_nodekind_for_value_ref(
+                        PAValueRef::Name {
+                            name: result,
+                            ty: None,
+                        },
+                        caller_name,
+                    ),
+                    PAEdgeKind::Copy,
+                    caller_name.to_string(),
+                    block_name.to_string(),
+                    caller_context.clone(),
+                );
+
+                return true;
+            }
+        }
+
+        false
+    }
+
     /// this function does the following:
     /// Direct call: check/add call edge in call_graph.
     /// Indirect call: add PAG edge from function pointer node so callee discovery is re-run when function pointer points-to changes.
@@ -1929,7 +2084,7 @@ impl<'m> PointerAssignmentGraph<'m> {
 
         let callee_name = direct_callee_name(direct_callee);
 
-        let callsite_id = self.register_callsite(
+        let (callsite_id, callsite) = self.register_callsite(
             caller_name.to_string(),
             block_name.to_string(),
             callsite_kind.clone(),
@@ -1992,7 +2147,7 @@ impl<'m> PointerAssignmentGraph<'m> {
                     caller_name,
                     caller_context.clone(),
                     block_name,
-                    callsite_kind,
+                    callsite,
                     callee_func,
                     callee_context.clone(),
                 );
@@ -2000,6 +2155,14 @@ impl<'m> PointerAssignmentGraph<'m> {
                 debug!(
                     "[PAG] add_edges_for_call: cannot find function with name {} from functions_by_name",
                     callee_name.clone()
+                );
+
+                self.handle_bodyless_call(
+                    &callee_name,
+                    &callsite_kind,
+                    caller_name,
+                    block_name,
+                    &caller_context,
                 );
             }
 
@@ -2078,7 +2241,7 @@ impl<'m> PointerAssignmentGraph<'m> {
                         caller_name,
                         caller_context.clone(),
                         block_name,
-                        callsite_kind,
+                        callsite.clone(),
                         callee_func,
                         caller_context.clone(),
                     );
@@ -2194,30 +2357,35 @@ impl<'m> PointerAssignmentGraph<'m> {
             PAContextSelectPolicy::AppOnly => {
                 self.app_crate.is_empty() || self.is_from_app_crate(callee_name)
             }
+
+            // TODO: we may not need this context creating for AFG
             PAContextSelectPolicy::AFG => {
-                // TODO: do we need so complex matching?
-                let matched = if let Some((llm, ac)) = self.config.context_signatures.as_ref() {
-                    crate::context_finder::match_callsite(
-                        callee_name,
-                        caller_name, // this is not used
-                        block_name,  // this is not used
-                        llm,
-                        ac,
-                    )
-                } else {
-                    None
-                };
+                // // TODO: do we need so complex matching?
+                // let matched = if let Some((llm, ac)) = self.config.context_signatures.as_ref() {
+                //     crate::context_finder::match_callsite(
+                //         callee_name,
+                //         caller_name, // this is not used
+                //         block_name,  // this is not used
+                //         llm,
+                //         ac,
+                //     )
+                // } else {
+                //     None
+                // };
 
-                if let Some(context_point) = matched.clone() {
-                    println!(
-                        "[AFG] hit context = {} with category = {:?} through strategy = {}",
-                        context_point.matched_fn_name,
-                        context_point.category,
-                        context_point.strategy
-                    );
-                }
+                // // for debugging, print the matched context if any
+                // if let Some(context_point) = matched.clone() {
+                //     println!(
+                //         "[AFG] hit context = {} with category = {:?} through strategy = {}",
+                //         context_point.matched_fn_name,
+                //         context_point.category,
+                //         context_point.strategy
+                //     );
+                // }
 
-                matched.is_some()
+                // matched.is_some()
+
+                false
             }
         };
 
@@ -2263,20 +2431,26 @@ impl<'m> PointerAssignmentGraph<'m> {
         caller_name: &str,
         caller_context: PAContext,
         block_name: &str,
-        callsite_kind: PACallSiteKind<'m>,
+        callsite: PACallSite<'m>,
         callee: &'m llvm_ir::Function,
         callee_context: PAContext,
     ) {
         let callee_name = callee.name.as_str();
-        let arguments = self.get_callsite_arguments(&callsite_kind);
-        let result = self.get_callsite_result(&callsite_kind);
+        let arguments = self.get_callsite_arguments(&callsite.kind);
+        let mut idx2nodeid: HashMap<usize, PANodeId> = HashMap::new();
+
+        debug!("[PAG] add_constraints_for_call: callee = {}", callee_name);
 
         // ------------------------------------------------------------
         // actual_i -> formal_i
+        // this should already include receiver/self edge:
+        //
+        //     receiver_actual -> formal_0
+        //
         // ------------------------------------------------------------
         for (idx, (actual_arg, _attrs)) in arguments.iter().enumerate() {
             if let Some(formal) = callee.parameters.get(idx) {
-                self.add_pag_edge_w_diff_contexts(
+                let (src_id, dst_id) = self.add_pag_edge_w_diff_contexts(
                     self.get_nodekind_for_value_ref(PAValueRef::Operand(actual_arg), caller_name),
                     self.get_nodekind_for_value_ref(PAValueRef::Parameter(formal), callee_name),
                     PAEdgeKind::Copy,
@@ -2285,44 +2459,87 @@ impl<'m> PointerAssignmentGraph<'m> {
                     caller_context.clone(),
                     callee_context.clone(),
                 );
+
+                debug!(
+                    "[PAG][args] caller={} callee={} idx={} actual={:?} formal={} src_id={} dst_id={} caller_ctx={:?} callee_ctx={:?}",
+                    caller_name,
+                    callee_name,
+                    idx,
+                    actual_arg,
+                    formal.name,
+                    src_id,
+                    dst_id,
+                    caller_context,
+                    callee_context,
+                );
+
+                idx2nodeid.insert(idx, dst_id);
             }
         }
 
+        // // ------------------------------------------------------------
+        // // receiver/self edge.
+        // //
+        // // For Rust methods, the self receiver is usually the first pointer-like
+        // // argument. We explicitly add:
+        // //
+        // //     receiver_actual -> formal_0
+        // //
+        // // if formal_0 exists.
+        // // ------------------------------------------------------------
+        // if let Some((self_idx, self_param)) = first_pointer_like_self_parameter(callee) {
+        //     if let Some((receiver_arg, _attr)) = arguments.get(self_idx) {
+        //         self.add_pag_edge_w_diff_contexts(
+        //             self.get_nodekind_for_value_ref(PAValueRef::Operand(receiver_arg), caller_name),
+        //             self.get_nodekind_for_value_ref(PAValueRef::Parameter(self_param), callee_name),
+        //             PAEdgeKind::Copy,
+        //             caller_name.to_string(),
+        //             block_name.to_string(),
+        //             caller_context.clone(),
+        //             callee_context.clone(),
+        //         );
+        //     }
+        // }
+
         // ------------------------------------------------------------
-        // receiver/self edge.
-        //
-        // For Rust methods, the self receiver is usually the first pointer-like
-        // argument. We explicitly add:
-        //
-        //     receiver_actual -> formal_0
-        //
-        // if formal_0 exists.
+        // callee formal sret -> function_return(callee)
         // ------------------------------------------------------------
-        if let Some((self_idx, self_param)) = first_pointer_like_self_parameter(callee) {
-            if let Some((receiver_arg, _attr)) = arguments.get(self_idx) {
-                self.add_pag_edge_w_diff_contexts(
-                    self.get_nodekind_for_value_ref(PAValueRef::Operand(receiver_arg), caller_name),
-                    self.get_nodekind_for_value_ref(PAValueRef::Parameter(self_param), callee_name),
-                    PAEdgeKind::Copy,
-                    caller_name.to_string(),
-                    block_name.to_string(),
-                    caller_context.clone(),
-                    callee_context.clone(),
-                );
-            }
+        if let Some((_idx, formal_sret)) = first_pointer_like_sret_parameter(callee) {
+            debug!(
+                "[PAG] found sret = {:?} in callee param = {}",
+                formal_sret, callee_name
+            );
+
+            self.add_pag_edge_w_diff_contexts(
+                self.get_nodekind_for_value_ref(PAValueRef::Parameter(formal_sret), callee_name),
+                PANodeKind::FunctionReturn {
+                    function: callee_name.to_string(),
+                },
+                PAEdgeKind::Copy,
+                caller_name.to_string(),
+                block_name.to_string(),
+                // Both nodes belong to the callee context.
+                callee_context.clone(),
+                callee_context.clone(),
+            );
         }
 
         // ------------------------------------------------------------
         // function_return(callee) -> lhs
         // ------------------------------------------------------------
-        if let Some(result) = &result {
-            self.add_pag_edge_w_diff_contexts(
+        let result_id: Option<PANodeId> = if let Some(result_name) =
+            self.get_callsite_result(&callsite.kind)
+        {
+            // Normal LLVM return:
+            //
+            // FunctionReturn(callee) -> caller lhs
+            let (_return_id, lhs_id) = self.add_pag_edge_w_diff_contexts(
                 PANodeKind::FunctionReturn {
                     function: callee_name.to_string(),
                 },
                 self.get_nodekind_for_value_ref(
                     PAValueRef::Name {
-                        name: *result,
+                        name: result_name,
                         ty: None,
                     },
                     caller_name,
@@ -2333,6 +2550,112 @@ impl<'m> PointerAssignmentGraph<'m> {
                 callee_context.clone(),
                 caller_context.clone(),
             );
+
+            // The result of this callsite is the caller-side lhs.
+            Some(lhs_id)
+        } else if let Some((idx, actual_sret_operand)) = first_pointer_like_sret_arg(arguments) {
+            // Hidden sret return:
+            //
+            // FunctionReturn(callee) -> caller actual sret operand
+            //
+            // Example:
+            // invoke void @build(ptr sret(...) %_17, ...)
+            //
+            // The call result is caller local %_17.
+            let actual_sret_kind = self
+                .get_nodekind_for_value_ref(PAValueRef::Operand(actual_sret_operand), caller_name);
+
+            debug!(
+                "[PAG] found sret = {} in argument when calling = {}",
+                actual_sret_operand, callee_name
+            );
+
+            let (_return_id, actual_sret_id) = self.add_pag_edge_w_diff_contexts(
+                PANodeKind::FunctionReturn {
+                    function: callee_name.to_string(),
+                },
+                actual_sret_kind,
+                PAEdgeKind::Copy,
+                caller_name.to_string(),
+                block_name.to_string(),
+                callee_context.clone(),
+                caller_context.clone(),
+            );
+
+            Some(actual_sret_id)
+        } else {
+            None
+        };
+        // normal flow ends here
+
+        // for AFG, check if the callsite matches any context signature
+        let matched = (self.config.policy == PAContextSelectPolicy::AFG)
+            .then(|| self.config.context_signatures.as_ref())
+            .flatten()
+            .and_then(|(llm, ac)| {
+                crate::signature::match_callsite(callee_name, caller_name, block_name, llm, ac)
+            });
+
+        // for debugging, print the matched context if any
+        if let Some(context_point) = matched {
+            println!(
+                "[AFG] hit function = {} with category = {:?} through strategy = {}",
+                context_point.matched_fn_name, context_point.category, context_point.strategy
+            );
+
+            let mut entries: Vec<(usize, PANodeId)> = idx2nodeid
+                .iter()
+                .map(|(&idx, &node_id)| (idx, node_id))
+                .collect();
+
+            entries.sort_by_key(|(idx, _)| *idx);
+
+            let arg_node_ids: Vec<PANodeId> =
+                entries.into_iter().map(|(_, node_id)| node_id).collect();
+
+            // special handling for authentication and llm-api categories
+            // TODO: other categories ??
+            if let Some(category) = context_point.category.clone() {
+                let kind = match category.as_str() {
+                    "authentication" | "authorization" => {
+                        SemanticPointKind::AccessControl { category }
+                    }
+
+                    // prompt-construction api call
+                    "llm-api-prompt" => SemanticPointKind::LlmPrompt { category },
+
+                    // external api call
+                    "llm-api-chat" => SemanticPointKind::LlmCall {
+                        category,
+                        provider: None,
+                    },
+
+                    _ => {
+                        panic!(
+                            "[AFG] unhandled context category = {:?} for callsite {:?}",
+                            category, callsite
+                        );
+                    }
+                };
+
+                let semantic_point = SemanticPoint {
+                    callsite_id: callsite.id,
+                    kind: kind,
+                    security_point: context_point,
+
+                    caller: caller_name.to_string(),
+                    block: block_name.to_string(),
+                    callee: Some(callee_name.to_string()),
+                    caller_context: caller_context.clone(),
+
+                    argument_nodes: arg_node_ids.clone(),
+                    result_node: result_id,
+                };
+
+                println!("[AFG] register semantic point = {:?}", semantic_point);
+
+                self.semantic_points.push(semantic_point);
+            }
         }
     }
 
@@ -3227,8 +3550,8 @@ impl<'m> PointerAssignmentGraph<'m> {
             self.add_constraints_for_call(
                 &callsite.caller,
                 callsite.context.clone(),
-                &callsite.block,
-                callsite.kind,
+                &callsite.block.clone(),
+                callsite.clone(),
                 callee_func,
                 callee_context,
             );
@@ -3289,7 +3612,7 @@ impl<'m> PointerAssignmentGraph<'m> {
                     &callsite.caller,
                     callsite.context.clone(),
                     &callsite.block,
-                    callsite.kind.clone(),
+                    callsite.clone(),
                     callee_func,
                     callee_context,
                 );
@@ -3348,7 +3671,7 @@ impl<'m> PointerAssignmentGraph<'m> {
                 &callsite.caller,
                 callsite.context.clone(),
                 &callsite.block,
-                callsite.kind,
+                callsite.clone(),
                 callee_func,
                 callee_context,
             );
@@ -3453,46 +3776,24 @@ impl<'m> PointerAssignmentGraph<'m> {
         block: String,
         call: PACallSiteKind<'m>,
         direct_callee: Option<String>,
-        context: PAContext,
-    ) -> usize {
+        caller_context: PAContext,
+    ) -> (usize, PACallSite<'m>) {
         let id = self.next_callsite_id;
         self.next_callsite_id += 1;
 
-        self.callsites.insert(
+        let callsite = PACallSite {
             id,
-            PACallSite {
-                id,
-                caller,
-                block,
-                kind: call,
-                direct_callee,
-                context,
-            },
-        );
+            caller,
+            block,
+            kind: call,
+            direct_callee,
+            context: caller_context,
+        };
 
-        id
+        self.callsites.insert(id, callsite.clone());
+
+        (id, callsite)
     }
-
-    // fn union_points_to_collect_delta(
-    //     &mut self,
-    //     node: PANodeId,
-    //     new_pts: &BTreeSet<PANodeId>,
-    // ) -> BTreeSet<PANodeId> {
-    //     let Some(n) = self.nodes.get_mut(&node) else {
-    //         return BTreeSet::new();
-    //     };
-
-    //     let mut delta = BTreeSet::new();
-
-    //     for p in new_pts {
-    //         if n.points_to.insert(*p) {
-    //             n.diff.insert(*p);
-    //             delta.insert(*p);
-    //         }
-    //     }
-
-    //     delta
-    // }
 
     fn points_to_snapshot(&self, node: PANodeId) -> BTreeSet<PANodeId> {
         self.nodes
@@ -3630,11 +3931,6 @@ impl<'m> PointerAssignmentGraph<'m> {
         );
     }
 
-    /// print the points-to sets of all nodes in the PAG to a file
-    pub fn context_points(&self) -> &[ContextPoint] {
-        &self.context_points
-    }
-
     pub fn print_points_to_sets(&self) -> Result<(), Box<dyn Error>> {
         let mut file = File::create("points_to.txt")?;
 
@@ -3761,47 +4057,6 @@ impl<'m> PointerAssignmentGraph<'m> {
         println!()
     }
 
-    /// enriched context report: each matched call site plus the points-to sets of
-    /// its argument and result values (resolved after the fixed point). this is
-    /// what connects the located LLM/AC call sites to the pointer analysis.
-    pub fn print_context_points(&self) -> Result<(), Box<dyn Error>> {
-        let mut file = File::create("context_points.txt")?;
-
-        writeln!(file, "=== Context Points ===")?;
-        writeln!(file, "total: {}", self.context_points.len())?;
-        writeln!(file)?;
-
-        for point in &self.context_points {
-            let kind = match point.kind {
-                ContextKind::LLMAPICalls => "LLM_API",
-                ContextKind::AccessControl => "ACCESS_CONTROL",
-            };
-            let category = point.category.as_deref().unwrap_or("-");
-
-            writeln!(
-                file,
-                "  [{}] {} in {}::{}  (matched {} / {} / {})",
-                kind,
-                point.callee,
-                point.caller,
-                point.block,
-                point.matched_fn_name,
-                category,
-                point.strategy
-            )?;
-
-            for (i, &n) in point.arg_nodes.iter().enumerate() {
-                writeln!(file, "      arg{}: {}", i, self.context_node_pts(n))?;
-            }
-            if let Some(n) = point.result_node {
-                writeln!(file, "      result: {}", self.context_node_pts(n))?;
-            }
-            writeln!(file)?;
-        }
-
-        Ok(())
-    }
-
     /// "n{id}:{key} -> { n{p}, ... }" for a node and its points-to set,
     /// capped so an over-approximated node doesn't dump thousands of ids
     fn context_node_pts(&self, id: PANodeId) -> String {
@@ -3918,7 +4173,7 @@ impl<'m> PointerAssignmentGraph<'m> {
             *functions_per_ctx.entry(ctx.key()).or_default() += 1;
             *ctx_lengths.entry(ctx.len()).or_default() += 1;
 
-            println!("[CTX FUNC] {} @ {}", function, ctx.key());
+            debug!("[CTX FUNC] {} @ {}", function, ctx.key());
         }
 
         println!();
@@ -3958,6 +4213,75 @@ impl<'m> PointerAssignmentGraph<'m> {
             }
         }
     }
+
+    ////////////////////////// cfg related //////////////////////////
+
+    pub fn get_normal_success_block(&self, function: &str, block: &str) -> Vec<String> {
+        let func = self
+            .functions_by_name
+            .get(normalize_function_name(function))
+            .copied();
+
+        let Some(func) = func else {
+            println!(
+                "[PAG] get_normal_cfg_successors: cannot find function body with name = {}",
+                function
+            );
+            return Vec::new();
+        };
+
+        let cfg: ControlFlowGraph<'_> = ControlFlowGraph::new(func);
+        let mut successors = Vec::new();
+        let name = normalize_block_label(&format!("{}", block));
+        let block_name = Name::Name(Box::new(name.to_string()));
+
+        for succ in cfg.succs(&block_name) {
+            let succ = normalize_block_label(&format!("{}", succ));
+            if !is_cleanup_block_name(&succ) {
+                successors.push(succ.clone())
+            }
+        }
+
+        println!(
+            "[PAG] get_normal_cfg_successors: find normal bb successors = {:?} for bb = {}",
+            successors, block
+        );
+
+        successors
+    }
+
+    /// compute the cleanup basicblocks and its successors that do not have normal incoming control flow edges
+    /// return a set of basicblock names that need to skip
+    fn compute_cleanup_blocks_with_cfg(&mut self, func: &llvm_ir::Function) -> BTreeSet<String> {
+        let cfg: ControlFlowGraph<'_> = ControlFlowGraph::new(func);
+
+        let mut skip = BTreeSet::new();
+        let mut worklist = VecDeque::new();
+
+        for bb in &func.basic_blocks {
+            let name = normalize_block_label(&format!("{}", &bb.name));
+            if is_cleanup_block_name(&name) {
+                if skip.insert(name.clone()) {
+                    worklist.push_back(name);
+                }
+            }
+        }
+
+        while let Some(block_name) = worklist.pop_front() {
+            let name = Name::Name(Box::new(block_name));
+            for succ in cfg.succs(&name) {
+                let succ = normalize_block_label(&format!("{}", succ));
+
+                if skip.insert(succ.clone()) {
+                    worklist.push_back(succ);
+                }
+            }
+        }
+
+        skip
+    }
+
+    ////////////////////////// cfg related end //////////////////////////
 }
 
 /// Helper functions
@@ -4183,20 +4507,21 @@ fn global_name_from_constant(c: &llvm_ir::Constant) -> Option<String> {
 /// to:
 /// <alloc::sync::Arc<T, A> as core::clone::Clone>::clone
 /// and check whether it is a Arc clone
-fn is_arc_clone(function_name: &str) -> bool {
+fn is_clone(function_name: &str) -> bool {
     let name = demangle(function_name).to_string();
 
-    name.starts_with("<alloc::sync::Arc<") && name.contains("> as core::clone::Clone>::clone")
+    name.ends_with("as core::clone::Clone>::clone")
 }
 
 /// <T as core::ops::deref::Deref>::deref for the smart pointers we alias through
-fn is_smart_pointer_deref(function_name: &str) -> bool {
+fn is_deref(function_name: &str) -> bool {
     let name = demangle(function_name).to_string();
 
-    name.contains("as core::ops::deref::Deref>::deref")
-        && (name.starts_with("<alloc::string::String")
-            || name.starts_with("<alloc::sync::Arc<")
-            || name.starts_with("<std::sync::mutex::MutexGuard<"))
+    name.ends_with("as core::ops::deref::Deref>::deref")
+        || name.ends_with("as core::ops::deref::DerefMut>::deref_mut")
+    // && (name.starts_with("<alloc::string::String")
+    //     || (name.starts_with("<alloc::sync::Arc<")
+    //     || name.starts_with("<std::sync::mutex::MutexGuard<"))
 }
 
 /// <alloc::string::String as ...Deref>::deref returns { ptr, i64 }
@@ -4495,7 +4820,7 @@ fn should_skip_function_body(function_name: &str) -> bool {
 
     if name.starts_with("llvm.")
         || name.contains("llvm.")
-        || name.contains("memcpy")
+        // || name.contains("memcpy")
         || name.contains("memmove")
         || name.contains("memset")
     {
@@ -4530,6 +4855,19 @@ fn should_skip_function_context(function_name: &str) -> bool {
     }
 
     false
+}
+/// only consider major llm service sdk apis here
+fn is_llm_api_function(name: &str) -> bool {
+    const CRATES: &[&str] = &[
+        "async_openai",
+        "ollama_rs",
+        "anthropic",
+        "mistral",
+        "cohere",
+        "genai",
+    ];
+
+    CRATES.iter().any(|crate_name| name.contains(crate_name))
 }
 
 /// process vtables from global variable to find function references in constant tables
@@ -4724,17 +5062,35 @@ fn memcpy_object_types_compatible(src_ty: &llvm_ir::TypeRef, dst_ty: &llvm_ir::T
     type_may_contain_pointer(src_ty) && type_may_contain_pointer(dst_ty)
 }
 
-fn normalize_block_label(name: &str) -> String {
+pub fn normalize_block_label(name: &str) -> String {
     name.trim()
         .trim_start_matches('%')
         .trim_matches('"')
         .to_string()
 }
 
-fn is_cleanup_block_name(name: &str) -> bool {
-    name == "cleanup" || name.starts_with("cleanup.") || name.starts_with("cleanup")
+pub fn is_cleanup_block_name(name: &str) -> bool {
+    name == "cleanup"
+        || name.starts_with("cleanup.")
+        || name.starts_with("cleanup")
+        || name == "terminate"
+        || name.starts_with("terminate")
+        || name.starts_with("unreachable")
+        || name == "panic"
+        || name.starts_with("panic")
 }
 
+fn is_global_reference_constant(op: &Operand) -> bool {
+    match op {
+        Operand::ConstantOperand(c) => {
+            return matches!(c.as_ref(), Constant::GlobalReference { .. })
+        }
+
+        _ => false,
+    }
+}
+
+/// return the first non sret pointer-like argument index
 fn first_pointer_like_non_sret_arg_index(
     args: &[(llvm_ir::Operand, Vec<llvm_ir::function::ParameterAttribute>)],
 ) -> Option<(usize, &Operand)> {
@@ -4758,6 +5114,26 @@ fn arg_has_sret_attr(attrs: &[llvm_ir::function::ParameterAttribute]) -> bool {
     })
 }
 
+fn first_pointer_like_sret_arg(
+    arguments: &Vec<(Operand, Vec<ParameterAttribute>)>,
+) -> Option<(usize, &Operand)> {
+    arguments
+        .iter()
+        .enumerate()
+        .find_map(|(idx, (operand, attributes))| {
+            let is_sret = attributes
+                .iter()
+                .any(|attribute| return matches!(attribute, ParameterAttribute::SRet(_)));
+
+            if is_sret {
+                return Some((idx, operand));
+            } else {
+                return None;
+            }
+        })
+}
+
+/// return the index and parameter of the first function parameter that is named "self" and has a pointer-like type
 fn first_pointer_like_self_parameter(function: &llvm_ir::Function) -> Option<(usize, &Parameter)> {
     function
         .parameters
@@ -4768,6 +5144,23 @@ fn first_pointer_like_self_parameter(function: &llvm_ir::Function) -> Option<(us
             let is_ptr = type_is_pointer_like(&param.ty);
 
             if is_self && is_ptr {
+                Some((idx, param))
+            } else {
+                None
+            }
+        })
+}
+
+fn first_pointer_like_sret_parameter(function: &llvm_ir::Function) -> Option<(usize, &Parameter)> {
+    function
+        .parameters
+        .iter()
+        .enumerate()
+        .find_map(|(idx, param)| {
+            let is_sret = arg_has_sret_attr(&param.attributes);
+            let is_ptr = type_is_pointer_like(&param.ty);
+
+            if is_sret && is_ptr {
                 Some((idx, param))
             } else {
                 None

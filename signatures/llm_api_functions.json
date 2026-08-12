@@ -8,7 +8,7 @@
     "hub": [
         {
             "fn_name": "hub_lib::ai_models::instance::ModelInstance::chat_completions",
-            "category": "llm-api-hub",
+            "category": "llm-api",
             "return_type": "Result<ChatCompletionResponse, ApiError>",
             "parameter_type": [
                 "&self",
@@ -18,7 +18,7 @@
         },
         {
             "fn_name": "hub_lib::ai_models::instance::ModelInstance::completions",
-            "category": "llm-api-hub",
+            "category": "llm-api",
             "return_type": "Result<CompletionResponse, ApiError>",
             "parameter_type": [
                 "&self",
@@ -28,7 +28,7 @@
         },
         {
             "fn_name": "hub_lib::ai_models::instance::ModelInstance::embeddings",
-            "category": "llm-api-hub",
+            "category": "llm-api",
             "return_type": "Result<EmbeddingsResponse, ApiError>",
             "parameter_type": [
                 "&self",
@@ -38,7 +38,7 @@
         },
         {
             "fn_name": "hub_lib::providers::provider::Provider::chat_completions",
-            "category": "llm-api-hub",
+            "category": "llm-api",
             "return_type": "Result<ChatCompletionResponse, ApiError>",
             "parameter_type": [
                 "&self",
@@ -49,7 +49,7 @@
         },
         {
             "fn_name": "hub_lib::providers::provider::Provider::completions",
-            "category": "llm-api-hub",
+            "category": "llm-api",
             "return_type": "Result<CompletionResponse, ApiError>",
             "parameter_type": [
                 "&self",
@@ -60,7 +60,7 @@
         },
         {
             "fn_name": "hub_lib::providers::provider::Provider::embeddings",
-            "category": "llm-api-hub",
+            "category": "llm-api",
             "return_type": "Result<EmbeddingsResponse, ApiError>",
             "parameter_type": [
                 "&self",
@@ -73,89 +73,57 @@
     "async-openai": [
         {
             "fn_name": "async_openai::chat::Chat::create",
-            "category": "llm-api-openai",
+            "category": "llm-api-chat",
             "return_type": "Result<CreateChatCompletionResponse, OpenAIError>",
             "parameter_type": [
+                "result",
                 "&self",
                 "CreateChatCompletionRequest"
             ],
+            "request_index": 2,
             "verified_via": "context7:/64bit/async-openai"
         },
         {
-            "fn_name": "async_openai::chat::Chat::create_stream",
-            "category": "llm-api-openai",
-            "return_type": "Result<ChatCompletionResponseStream, OpenAIError>",
+            "fn_name": "async_openai::types::chat::CreateChatCompletionRequestArgs::messages",
+            "category": "llm-api-prompt",
+            "return_type": "&mut CreateChatCompletionRequestArgs",
             "parameter_type": [
-                "&self",
-                "CreateChatCompletionRequest"
+                "&mut self",
+                "VALUE: Into<Vec<ChatCompletionRequestMessage>>"
             ],
+            "prompt_arg_index": 1,
+            "prompt_role": "mixed",
             "verified_via": "context7:/64bit/async-openai"
         },
         {
-            "fn_name": "async_openai::completion::Completions::create",
-            "category": "llm-api-openai",
-            "return_type": "Result<CreateCompletionResponse, OpenAIError>",
+            "fn_name": "async_openai::types::responses::CreateResponseArgs::input",
+            "category": "llm-api-prompt",
+            "return_type": "&mut CreateResponseArgs",
             "parameter_type": [
-                "&self",
-                "CreateCompletionRequest"
+                "&mut self",
+                "VALUE: Into<InputParam>"
             ],
+            "prompt_arg_index": 1,
+            "prompt_role": "mixed",
             "verified_via": "context7:/64bit/async-openai"
         },
         {
-            "fn_name": "async_openai::completion::Completions::create_stream",
-            "category": "llm-api-openai",
-            "return_type": "Result<CompletionResponseStream, OpenAIError>",
+            "fn_name": "async_openai::types::responses::InputMessageArgs::content",
+            "category": "llm-api-prompt",
+            "return_type": "&mut InputMessageArgs",
             "parameter_type": [
-                "&self",
-                "CreateCompletionRequest"
+                "&mut self",
+                "VALUE: Into<Vec<InputContent>>"
             ],
-            "verified_via": "context7:/64bit/async-openai"
-        },
-        {
-            "fn_name": "async_openai::embedding::Embeddings::create",
-            "category": "llm-api-openai",
-            "return_type": "Result<CreateEmbeddingResponse, OpenAIError>",
-            "parameter_type": [
-                "&self",
-                "CreateEmbeddingRequest"
-            ],
-            "verified_via": "context7:/64bit/async-openai"
-        },
-        {
-            "fn_name": "async_openai::image::Images::create",
-            "category": "llm-api-openai",
-            "return_type": "Result<ImagesResponse, OpenAIError>",
-            "parameter_type": [
-                "&self",
-                "CreateImageRequest"
-            ],
-            "verified_via": "context7:/64bit/async-openai"
-        },
-        {
-            "fn_name": "async_openai::audio::Audio::speech",
-            "category": "llm-api-openai",
-            "return_type": "Result<CreateSpeechResponse, OpenAIError>",
-            "parameter_type": [
-                "&self",
-                "CreateSpeechRequest"
-            ],
-            "verified_via": "context7:/64bit/async-openai"
-        },
-        {
-            "fn_name": "async_openai::audio::Audio::transcribe",
-            "category": "llm-api-openai",
-            "return_type": "Result<CreateTranscriptionResponseJson, OpenAIError>",
-            "parameter_type": [
-                "&self",
-                "CreateTranscriptionRequest"
-            ],
+            "prompt_arg_index": 1,
+            "prompt_role": "role",
             "verified_via": "context7:/64bit/async-openai"
         }
     ],
     "ollama-rs": [
         {
             "fn_name": "ollama_rs::Ollama::generate",
-            "category": "llm-api-ollama",
+            "category": "llm-api",
             "return_type": "Result<GenerationResponse, OllamaError>",
             "parameter_type": [
                 "&self",
@@ -165,7 +133,7 @@
         },
         {
             "fn_name": "ollama_rs::Ollama::generate_stream",
-            "category": "llm-api-ollama",
+            "category": "llm-api",
             "return_type": "Result<GenerationResponseStream, OllamaError>",
             "parameter_type": [
                 "&self",
@@ -175,7 +143,7 @@
         },
         {
             "fn_name": "ollama_rs::Ollama::send_chat_messages",
-            "category": "llm-api-ollama",
+            "category": "llm-api",
             "return_type": "Result<ChatMessageResponse, OllamaError>",
             "parameter_type": [
                 "&self",
@@ -185,7 +153,7 @@
         },
         {
             "fn_name": "ollama_rs::Ollama::send_chat_messages_with_history",
-            "category": "llm-api-ollama",
+            "category": "llm-api",
             "return_type": "Result<ChatMessageResponse, OllamaError>",
             "parameter_type": [
                 "&self",
@@ -196,7 +164,7 @@
         },
         {
             "fn_name": "ollama_rs::Ollama::generate_embeddings",
-            "category": "llm-api-ollama",
+            "category": "llm-api",
             "return_type": "Result<GenerateEmbeddingsResponse, OllamaError>",
             "parameter_type": [
                 "&self",
@@ -206,7 +174,7 @@
         },
         {
             "fn_name": "ollama_rs::coordinator::Coordinator::chat",
-            "category": "llm-api-ollama",
+            "category": "llm-api",
             "return_type": "Result<ChatMessageResponse, OllamaError>",
             "parameter_type": [
                 "&mut self",

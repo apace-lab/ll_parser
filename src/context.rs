@@ -1,4 +1,6 @@
-use crate::context_finder::Signature;
+use std::{format, panic};
+
+use crate::signature::Signature;
 
 /// our context-sensitive can be:
 ///     k-callsite only
@@ -19,6 +21,16 @@ pub enum PAContextElem {
         block: String,
         /// receiver obj node id
         id: usize,
+    },
+
+    Principal {
+        auth_callsite: usize,
+    },
+
+    LlmApi {
+        callsite_id: usize,
+        provider: String,
+        function: String,
     },
 }
 
@@ -46,6 +58,7 @@ pub enum PAObjectContextKind {
 pub enum PAContext {
     Global,
     Elements(Vec<PAContextElem>),
+    Semantics(Vec<PAContextElem>), // for AFG, not bounded by k
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -71,6 +84,7 @@ impl PAContext {
         match self {
             PAContext::Global => 0,
             PAContext::Elements(elems) => elems.len(),
+            PAContext::Semantics(elems) => elems.len(),
         }
     }
 
@@ -78,7 +92,26 @@ impl PAContext {
         match self {
             PAContext::Global => &[],
             PAContext::Elements(elems) => elems.as_slice(),
+            PAContext::Semantics(elems) => &[],
         }
+    }
+
+    pub fn semantics(&self) -> &[PAContextElem] {
+        match self {
+            PAContext::Global => &[],
+            PAContext::Elements(elems) => &[],
+            PAContext::Semantics(elems) => elems.as_slice(),
+        }
+    }
+
+    pub fn principals(&self) -> impl Iterator<Item = &PAContextElem> {
+        self.semantics()
+            .iter()
+            .filter(|e| matches!(e, PAContextElem::Principal { .. }))
+    }
+
+    pub fn has_principal(&self) -> bool {
+        self.principals().next().is_some()
     }
 
     pub fn filtered_for_mode(&self, config: &PAConfig) -> Self {
@@ -173,6 +206,34 @@ impl PAContext {
                     } => {
                         format!("Obj({:?}:{}:{}:{})", kind, caller, block, id)
                     }
+
+                    _ => panic!(
+                        "Seeing wrong type of PAContext element in Elements: {:?}",
+                        e
+                    ),
+                })
+                .collect::<Vec<_>>()
+                .join("/"),
+
+            PAContext::Semantics(elems) => elems
+                .iter()
+                .map(|e| match e {
+                    PAContextElem::LlmApi {
+                        callsite_id,
+                        provider,
+                        function,
+                    } => {
+                        format!("LlmApi({}:{}:{})", callsite_id, provider, function)
+                    }
+
+                    PAContextElem::Principal { auth_callsite } => {
+                        format!("Principal({})", auth_callsite)
+                    }
+
+                    _ => panic!(
+                        "Seeing wrong type of PAContext element in Semantic: {:?}",
+                        e
+                    ),
                 })
                 .collect::<Vec<_>>()
                 .join("/"),

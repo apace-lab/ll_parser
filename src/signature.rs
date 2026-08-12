@@ -8,13 +8,16 @@ use either::Either;
 use llvm_ir::instruction::Instruction;
 use llvm_ir::terminator::Terminator;
 use llvm_ir::{Constant, Module, Operand};
+use log::debug;
 use rustc_demangle::demangle;
 use std::collections::HashMap;
 use std::error::Error;
 use std::path::Path;
+use std::println;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ContextKind {
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum SecurityTag {
+    LLMAPIPrompt,
     LLMAPICalls,
     AccessControl,
 }
@@ -23,22 +26,31 @@ pub enum ContextKind {
 pub struct Signature {
     pub fn_name: String,
     pub category: Option<String>,
+    pub prompt_arg_index: Option<usize>, // TODO: there might be multiple prompt args, but for now we only support one
+    pub prompt_role: Option<String>,
+    pub result_index: Option<usize>,
+    pub request_index: Option<usize>, // TODO: there might be multiple request args, but for now we only support one
 }
 
 #[derive(Debug, Clone)]
-pub struct ContextPoint {
-    pub kind: ContextKind,
+pub struct SecurityPoint {
+    pub kind: SecurityTag,
     pub caller: String, // for debugging purpose
     pub block: String,  // caller's basic block, for debugging purpose
     pub callee: String,
     pub matched_fn_name: String,
+
     pub category: Option<String>,
+    pub prompt_arg_index: Option<usize>, // for llm-api-prompt, the index of the argument that is the prompt
+    pub prompt_role: Option<String>, // for llm-api-prompt, the role of the prompt (system/user/developer)
+    // pub result_index: Option<usize>, // for llm-api-chat, the index of the argument that is the result, i.e., sret
+    pub request_index: Option<usize>, // for llm-api-chat, the index of the argument that is the request (should include prompt)
     pub strategy: &'static str,
-    /// PAG node ids for this call's argument values (filled in by the pointer
-    /// analysis); their points-to sets are resolved after the fixed point
-    pub arg_nodes: Vec<usize>,
-    /// PAG node id for this call's result value, if any
-    pub result_node: Option<usize>,
+    // /// PAG node ids for this call's argument values (filled in by the pointer
+    // /// analysis); their points-to sets are resolved after the fixed point
+    // pub arg_nodes: Vec<usize>,
+    // /// PAG node id for this call's result value, if any
+    // pub result_node: Option<usize>,
 }
 
 /// load fn_name signatures from an AFG catalog json, skipping the _schema_notes key
@@ -63,12 +75,45 @@ pub fn load_signatures(path: &Path) -> Result<Vec<Signature>, Box<dyn Error>> {
                 continue;
             }
 
+            debug!("[AFG] load_signatures: entry={:?}", entry);
+
             let category = entry
                 .get("category")
                 .and_then(|c| c.as_str())
                 .map(|s| s.to_string());
 
-            signatures.push(Signature { fn_name, category });
+            let prompt_arg_index = entry
+                .get("prompt_arg_index")
+                .and_then(|i| i.as_u64())
+                .map(|i| i as usize);
+
+            let prompt_role = entry
+                .get("prompt_role")
+                .and_then(|r| r.as_str())
+                .map(|s| s.to_string());
+
+            let result_index = entry
+                .get("result_index")
+                .and_then(|i| i.as_u64())
+                .map(|i| i as usize);
+
+            let request_index: Option<usize> = entry
+                .get("request_index")
+                .and_then(|i| i.as_u64())
+                .map(|i| i as usize);
+
+            debug!("[AFG] load_signatures: fn_name={}, category={:?}, prompt_arg_index={:?}, prompt_role={:?}, result_index={:?}, request_index={:?}",
+                    fn_name, category, prompt_arg_index, prompt_role, result_index, request_index
+                );
+
+            signatures.push(Signature {
+                fn_name,
+                category,
+                prompt_arg_index,
+                prompt_role,
+                result_index,
+                request_index,
+            });
         }
     }
 
@@ -76,11 +121,11 @@ pub fn load_signatures(path: &Path) -> Result<Vec<Signature>, Box<dyn Error>> {
 }
 
 /// scan every call/invoke in the module and record catalog matches
-pub fn find_context_points(
+pub fn find_security_points(
     module: &Module,
     llm: &[Signature],
     ac: &[Signature],
-) -> Vec<ContextPoint> {
+) -> Vec<SecurityPoint> {
     let mut points = Vec::new();
 
     for func in &module.functions {
@@ -120,28 +165,37 @@ pub fn match_callsite(
     block: &str,
     llm: &[Signature],
     ac: &[Signature],
-) -> Option<ContextPoint> {
+) -> Option<SecurityPoint> {
     let demangled = format!("{:#}", demangle(&strip_symbol(callee_mangled)));
     let candidates = candidate_paths(&demangled);
 
     let (kind, (sig, strategy)) = if let Some(hit) = match_any(&candidates, llm) {
-        (ContextKind::LLMAPICalls, hit)
+        (SecurityTag::LLMAPICalls, hit)
     } else if let Some(hit) = match_any(&candidates, ac) {
-        (ContextKind::AccessControl, hit)
+        (SecurityTag::AccessControl, hit)
     } else {
         return None;
     };
 
-    Some(ContextPoint {
+    debug!(
+        "[AFG] match_callsite: sig.request_index={:?}",
+        sig.request_index
+    );
+
+    Some(SecurityPoint {
         kind,
         caller: format!("{:#}", demangle(&strip_symbol(caller))),
         block: block.to_string(),
         callee: demangled.to_string(),
         matched_fn_name: sig.fn_name.clone(),
         category: sig.category.clone(),
+        prompt_arg_index: sig.prompt_arg_index,
+        prompt_role: sig.prompt_role.clone(),
+        // result_index: sig.result_index,
+        request_index: sig.request_index,
         strategy,
-        arg_nodes: Vec::new(),
-        result_node: None,
+        // arg_nodes: Vec::new(),
+        // result_node: None,
     })
 }
 
@@ -285,6 +339,10 @@ mod tests {
         Signature {
             fn_name: fn_name.to_string(),
             category: None,
+            prompt_arg_index: None,
+            prompt_role: None,
+            result_index: None,
+            request_index: None,
         }
     }
 

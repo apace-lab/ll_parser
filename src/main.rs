@@ -135,10 +135,9 @@ fn main() -> Result<(), Box<dyn Error>> {
     // optionally write the parsed module(s) for debugging
     if has_flag(&args, "--info") {
         for (i, module) in modules.iter().enumerate() {
-            let output_txt = if modules.len() == 1 {
-                "parsed_module.txt".to_string()
-            } else {
-                format!("parsed_module_{}.txt", i)
+            let output_txt = match modules.len() {
+                1 => "parsed_module.txt".to_string(),
+                _ => format!("parsed_module_{i}.txt"),
             };
             write_module_to_file(module, &output_txt)?;
             println!("Wrote parsed module info to: {}", output_txt);
@@ -196,11 +195,9 @@ fn main() -> Result<(), Box<dyn Error>> {
                 let llm_api_path = get_flag_value(&args, "--api=");
                 let ac_path = get_flag_value(&args, "--ac=");
                 if let (Some(llm_api_path), Some(ac_path)) = (llm_api_path, ac_path) {
-                    let llm_api = ll_parser::context_finder::load_signatures(
-                        std::path::Path::new(llm_api_path),
-                    )?;
-                    let ac =
-                        ll_parser::context_finder::load_signatures(std::path::Path::new(ac_path))?;
+                    let llm_api =
+                        ll_parser::signature::load_signatures(std::path::Path::new(llm_api_path))?;
+                    let ac = ll_parser::signature::load_signatures(std::path::Path::new(ac_path))?;
                     println!(
                         "Loaded {} LLM API and {} AC signatures",
                         llm_api.len(),
@@ -211,6 +208,10 @@ fn main() -> Result<(), Box<dyn Error>> {
                     let pag: std::cell::Ref<'_, ll_parser::PointerAssignmentGraph<'_>> =
                         analysis.pointer_assignment_graph(mode, None);
                     pag.print_pointer_assignment_graph()?;
+
+                    // // run the AFG engine on the PAG
+                    // let afg = analysis.afg_engine(mode, None);
+                    // afg.print_leak_result(false, false);
                 } else {
                     eprintln!("Usage: cargo run -- input.ll --api=api.json --ac=ac.json");
                     return Ok(());
