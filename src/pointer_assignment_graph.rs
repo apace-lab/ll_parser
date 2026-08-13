@@ -4,7 +4,7 @@ use crate::call_graph::CallGraph;
 use crate::context::{
     PAConfig, PAContext, PAContextElem, PAContextMode, PAContextSelectPolicy, PAObjectContextKind,
 };
-use crate::signature::{SecurityPoint, Signature};
+use crate::signature::Signature;
 use crate::AFGContextEngine;
 use crate::ControlFlowGraph;
 use crate::FunctionsByType;
@@ -14,7 +14,6 @@ use llvm_ir::function::ParameterAttribute;
 use llvm_ir::instruction::{InlineAssembly, Instruction};
 use llvm_ir::{Constant, ConstantRef, Function, Module, Name, Operand, Type, TypeRef};
 use log::debug;
-use petgraph::csr;
 use rustc_demangle::demangle;
 use std::collections::{BTreeMap, BTreeSet, HashMap, VecDeque};
 use std::error::Error;
@@ -2267,16 +2266,6 @@ impl<'m> PointerAssignmentGraph<'m> {
         }
     }
 
-    fn get_callsite_function_operand(
-        &mut self,
-        kind: &PACallSiteKind<'m>,
-    ) -> Option<&'m llvm_ir::Operand> {
-        match kind {
-            PACallSiteKind::Call(call) => call_function_operand(&call.function),
-            PACallSiteKind::Invoke(invoke) => call_function_operand(&invoke.function),
-        }
-    }
-
     fn get_callsite_context_elem(
         &self,
         caller: &str,
@@ -2588,7 +2577,7 @@ impl<'m> PointerAssignmentGraph<'m> {
         };
         // normal flow ends here
 
-        /// for AFG, check if the callsite matches any context signature
+        // for AFG, check if the callsite matches any context signature
         let matched = (self.config.policy == PAContextSelectPolicy::AFG)
             .then(|| self.config.context_signatures.as_ref())
             .flatten()
@@ -3816,69 +3805,6 @@ impl<'m> PointerAssignmentGraph<'m> {
             .unwrap_or_default()
     }
 
-    // fn diff_snapshot(&self, node: PANodeId) -> BTreeSet<PANodeId> {
-    //     self.nodes
-    //         .get(&node)
-    //         .map(|n| n.diff.clone())
-    //         .unwrap_or_default()
-    // }
-
-    // fn insert_points_to(&mut self, node: PANodeId, pointee: PANodeId) -> bool {
-    //     let Some(n) = self.nodes.get_mut(&node) else {
-    //         return false;
-    //     };
-
-    //     if n.points_to.insert(pointee) {
-    //         n.diff.insert(pointee);
-    //         true
-    //     } else {
-    //         false
-    //     }
-    // }
-
-    // fn union_points_to(&mut self, node: PANodeId, new_pts: &BTreeSet<PANodeId>) -> bool {
-    //     let Some(n) = self.nodes.get_mut(&node) else {
-    //         return false;
-    //     };
-
-    //     let mut changed = false;
-
-    //     for p in new_pts {
-    //         if n.points_to.insert(*p) {
-    //             n.diff.insert(*p);
-    //             changed = true;
-    //         }
-    //     }
-
-    //     changed
-    // }
-
-    /// type filter for store
-    fn store_may_write_pointer_value_to_object(
-        &self,
-        src_value: PANodeId,
-        dst_object: PANodeId,
-    ) -> bool {
-        let src_ty = self.nodes.get(&src_value).and_then(|n| n.ty.as_ref());
-        let obj_ty = self.nodes.get(&dst_object).and_then(|n| n.ty.as_ref());
-
-        match (src_ty, obj_ty) {
-            // Unknown: keep conservative.
-            (None, _) | (_, None) => true,
-
-            (Some(src_ty), Some(obj_ty)) => {
-                // We only track pointer values in points-to sets.
-                // If src is definitely not pointer-like, do not store it into points-to memory.
-                if !type_is_pointer_like(src_ty) {
-                    return false;
-                }
-
-                // If the destination object cannot contain a pointer, skip.
-                type_may_contain_pointer(obj_ty)
-            }
-        }
-    }
-
     /// type filter for FieldObject solvers
     fn object_may_hold_pointer_value(&self, obj: PANodeId) -> bool {
         let Some(node) = self.nodes.get(&obj) else {
@@ -3965,7 +3891,7 @@ impl<'m> PointerAssignmentGraph<'m> {
                     write!(file, ", ")?;
                 }
 
-                /// print the pointee node in a more readable format
+                //// print the pointee node in a more readable format
                 // let pointee = self
                 //     .nodes
                 //     .get(pointee_id)
@@ -3980,10 +3906,6 @@ impl<'m> PointerAssignmentGraph<'m> {
         }
 
         Ok(())
-    }
-
-    fn total_points_to_facts(&self) -> usize {
-        self.nodes.values().map(|node| node.points_to.len()).sum()
     }
 
     /// print the PAG to a file
@@ -4069,30 +3991,6 @@ impl<'m> PointerAssignmentGraph<'m> {
         //     println!("context points: {}", self.context_points().len());
         // }
         println!()
-    }
-
-    /// "n{id}:{key} -> { n{p}, ... }" for a node and its points-to set,
-    /// capped so an over-approximated node doesn't dump thousands of ids
-    fn context_node_pts(&self, id: PANodeId) -> String {
-        let Some(node) = self.nodes.get(&id) else {
-            return format!("n{}", id);
-        };
-
-        const CAP: usize = 12;
-        let total = node.points_to.len();
-        let shown: Vec<String> = node
-            .points_to
-            .iter()
-            .take(CAP)
-            .map(|p| format!("n{}", p))
-            .collect();
-        let more = if total > CAP {
-            format!(", ... ({} total)", total)
-        } else {
-            return String::new();
-        };
-
-        return format!("{} -> {{{}{}}}", node, shown.join(", "), more);
     }
 
     fn print_edge_kind_statistics(&self) {
@@ -4237,7 +4135,7 @@ impl<'m> PointerAssignmentGraph<'m> {
             .copied();
 
         let Some(func) = func else {
-            println!(
+            debug!(
                 "[PAG] get_normal_cfg_successors: cannot find function body with name = {}",
                 function
             );
@@ -4256,7 +4154,7 @@ impl<'m> PointerAssignmentGraph<'m> {
             }
         }
 
-        println!(
+        debug!(
             "[PAG] get_normal_cfg_successors: find normal bb successors = {:?} for bb = {}",
             successors, block
         );
@@ -4329,24 +4227,6 @@ fn direct_callee_name_from_constant(c: &llvm_ir::Constant) -> Option<String> {
     }
 }
 
-fn operand_is_pointer_like(op: &Operand) -> bool {
-    match op {
-        Operand::LocalOperand { ty, .. } => type_is_pointer_like(ty),
-        Operand::ConstantOperand(cref) => constant_is_pointer_like(cref.as_ref()),
-        _ => false,
-    }
-}
-
-fn constant_is_pointer_like(c: &Constant) -> bool {
-    match c {
-        Constant::GlobalReference { ty, .. } => type_is_pointer_like(ty),
-        Constant::Null(ty) => type_is_pointer_like(ty),
-        Constant::BitCast(bitcast) => type_is_pointer_like(&bitcast.to_type),
-        // Constant::GetElementPtr(gep) => type_is_pointer_like(&gep.address.ty),
-        _ => false,
-    }
-}
-
 fn type_is_pointer_like(ty: &TypeRef) -> bool {
     return matches!(ty.as_ref(), Type::PointerType { .. });
 }
@@ -4380,79 +4260,8 @@ fn constant_type(c: &llvm_ir::Constant) -> Option<llvm_ir::TypeRef> {
     }
 }
 
-fn pointee_type_of_pointer(_ty: &llvm_ir::TypeRef) -> Option<llvm_ir::TypeRef> {
-    None // TODO: ??
-}
-
 fn type_key(ty: &llvm_ir::TypeRef) -> String {
     return format!("{:?}", ty);
-}
-
-fn read_constant_table(c: &ConstantRef, indent: usize) {
-    let pad = " ".repeat(indent);
-
-    match c.as_ref() {
-        // Constant::Struct { values, is_packed } => {
-        //     println!("{}Struct packed={}", pad, is_packed);
-
-        //     for (i, value) in values.iter().enumerate() {
-        //         println!("{}  field[{}]:", pad, i);
-        //         self.read_constant_table(value, indent + 4);
-        //     }
-        // }
-        Constant::Array {
-            element_type,
-            elements,
-        } => {
-            println!("{}Array element_type={:?}", pad, element_type);
-
-            for (i, elem) in elements.iter().enumerate() {
-                println!("{}  elem[{}]:", pad, i);
-                read_constant_table(elem, indent + 4);
-            }
-        }
-
-        Constant::Vector(elements) => {
-            println!("{}Vector", pad);
-
-            for (i, elem) in elements.iter().enumerate() {
-                println!("{}  elem[{}]:", pad, i);
-                read_constant_table(elem, indent + 4);
-            }
-        }
-
-        Constant::GlobalReference { name, ty } => {
-            println!("{}GlobalReference name={} ty={:?}", pad, name, ty);
-        }
-
-        Constant::BitCast(bitcast) => {
-            println!("{}BitCast to {:?}", pad, bitcast.to_type);
-            read_constant_table(&bitcast.operand, indent + 4);
-        }
-
-        Constant::GetElementPtr(gep) => {
-            println!("{}GetElementPtr", pad);
-            println!("{}  address:", pad);
-            read_constant_table(&gep.address, indent + 4);
-
-            for (i, idx) in gep.indices.iter().enumerate() {
-                println!("{}  index[{}]:", pad, i);
-                read_constant_table(idx, indent + 4);
-            }
-        }
-
-        Constant::Int { bits, value } => {
-            println!("{}Int bits={} value={}", pad, bits, value);
-        }
-
-        Constant::Null(ty) => {
-            println!("{}Null ty={:?}", pad, ty);
-        }
-
-        other => {
-            println!("{}Other constant: {:?}", pad, other);
-        }
-    }
 }
 
 fn collect_function_refs_from_constant(c: &ConstantRef, out: &mut Vec<String>) {
@@ -4933,21 +4742,6 @@ fn collect_vtable_functions<'m>(
     }
 
     (global_function_refs, function_referrers)
-}
-
-fn is_thread_spawn_relevant_closure_or_backtrace(name: &str) -> bool {
-    let name = normalize_function_name(name);
-
-    name.contains("_ZN4core3ops8function6FnOnce40call_once$u7b$$u7b$vtable.shim")
-        || name.contains("_ZN3std6thread7Builder16spawn_unchecked_28_$u7b$$u7b$closure$u7d$$u7d$")
-        || name.contains("_ZN3std10sys_common9backtrace28__rust_begin_short_backtrace")
-        || name.contains("_ZN4main16spawn_user_query28_$u7b$$u7b$closure$u7d$$u7d$")
-}
-
-fn is_spawn_unchecked_closure(name: &str) -> bool {
-    let name = normalize_function_name(name);
-
-    name.contains("_ZN3std6thread7Builder16spawn_unchecked_28_$u7b$$u7b$closure$u7d$$u7d$")
 }
 
 fn type_may_contain_pointer(ty: &llvm_ir::TypeRef) -> bool {

@@ -6,6 +6,7 @@ use crate::pointer_assignment_graph::PANodeId;
 use crate::signature::SecurityPoint;
 use crate::PAEdge;
 use crate::PointerAssignmentGraph;
+use log::debug;
 use std::collections::BTreeMap;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::fmt;
@@ -86,37 +87,11 @@ impl fmt::Display for SemanticPoint {
     }
 }
 
-// -----------------------------------------------------------------------------
-// Execution context
-// -----------------------------------------------------------------------------
-
-/// A principal is active in a particular function/block/context.
-///
-/// This is different from a value carrying the principal.
-///
-/// Example:
-///
-///     verify_password(...)
-///              |
-///              v
-///       successful block
-///
-/// The successful block executes under Principal(auth_site=105), but not every
-/// value in the block should automatically become user data.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-struct ExecutionLocation {
-    function: String,
-    block: String,
-    context: PAContext,
-}
-
 pub struct AFGContextEngine<'m> {
     pag: &'m PointerAssignmentGraph<'m>,
     callsites: BTreeMap<usize, PACallSite<'m>>,
     /// caller -> block -> set of callsite_ids
     pub callsites_by_block: HashMap<String, HashMap<String, Vec<usize>>>,
-    /// callee -> callsite ids
-    pub callee2callsites: HashMap<String, Vec<usize>>,
 
     /// Semantic contexts carried by PAG nodes.
     pub node_contexts: HashMap<PANodeId, HashSet<PAContextElem>>,
@@ -138,13 +113,12 @@ pub struct AFGContextEngine<'m> {
 impl<'m> AFGContextEngine<'m> {
     pub fn new(pag: &'m PointerAssignmentGraph<'m>) -> Self {
         let outgoing = Self::build_outgoing_edges(&pag.edges);
-        let (callsites_by_block, callee2callsites) = Self::build_calls(&pag.callsites);
+        let (callsites_by_block, _callee2callsites) = Self::build_calls(&pag.callsites);
 
         let mut engine = Self {
             pag,
             callsites: pag.callsites.clone(),
             callsites_by_block,
-            callee2callsites,
             node_contexts: HashMap::new(),
             active_principals: HashMap::new(),
             outgoing,
@@ -341,7 +315,7 @@ impl<'m> AFGContextEngine<'m> {
         callsite_id: usize,
         pos_mode: ReturnPropagationMode,
     ) -> Vec<PACallSite<'m>> {
-        println!(
+        debug!(
             "[AFG] get callsites for caller = {}, block = {}, callsite_id = {}",
             caller, block, callsite_id
         );
@@ -354,13 +328,14 @@ impl<'m> AFGContextEngine<'m> {
             return Vec::new();
         };
 
-        println!(
+        debug!(
             "[AFG] get_callsites_after_in_block: current callsites = {:?}",
             callsites
         );
         for cs in callsites {
+            // also debug
             if let Some(cs) = self.callsites.get(cs) {
-                println!("[AFG]     {:?}", cs);
+                debug!("[AFG]     {:?}", cs);
             }
         }
 
@@ -377,7 +352,7 @@ impl<'m> AFGContextEngine<'m> {
             ReturnPropagationMode::AfterReturnedCall => pos + 1,
             ReturnPropagationMode::IncludeCurrentCall => pos,
         };
-        println!("[AFG] find pos = {}, start_pos = {}", pos, start_pos);
+        debug!("[AFG] find pos = {}, start_pos = {}", pos, start_pos);
 
         let ids = callsites.iter().skip(start_pos).copied().collect();
 
@@ -411,7 +386,7 @@ impl<'m> AFGContextEngine<'m> {
     /// return all successor bbs of block in function following normal execution
     fn get_normal_success_block(&self, function: &str, block: &str) -> Option<String> {
         let bbs = self.pag.get_normal_success_block(function, block);
-        println!("[AFG] get_normal_success_block: find {} success blocks ({:?}) for function = {}, bb = {}", bbs.len(), bbs, function, block);
+        debug!("[AFG] get_normal_success_block: find {} success blocks ({:?}) for function = {}, bb = {}", bbs.len(), bbs, function, block);
 
         if bbs.is_empty() {
             return None;
@@ -421,8 +396,8 @@ impl<'m> AFGContextEngine<'m> {
         if bbs.len() > 1 {
             // special, i've only seen 1 successor so far
             println!(
-                "[AFG] get_normal_success_block: only return the 1st successor block = {}",
-                successor
+                "[AFG] get_normal_success_block: only return the 1st successor block = {} but found {}: {:?}",
+                successor, bbs.len(), bbs,
             );
         }
 
@@ -453,21 +428,21 @@ impl<'m> AFGContextEngine<'m> {
 
             let Some(success_block) = self.get_normal_success_block(&point.caller, &point.block)
             else {
-                println!(
+                debug!(
                     "[AFG] seed_authenticated_functions: auth_callsite = {}: no success block",
                     point.callsite_id
                 );
                 continue;
             };
 
-            println!(
+            debug!(
                 "[AFG] seed_authenticated_functions: auth_callsite = {} success continuation: {}::{}",
                 point.callsite_id, point.caller, success_block
             );
 
             let reachable_blocks = self.normal_reachable_blocks(&point.caller, &success_block);
 
-            println!(
+            debug!(
                 "[AFG] seed_authenticated_functions: auth_callsite = {} reachable authenticated blocks = {:?}",
                 point.callsite_id, reachable_blocks
             );
@@ -481,7 +456,7 @@ impl<'m> AFGContextEngine<'m> {
                 let callsites =
                     self.get_callsites_in_block(&point.caller, &block, &point.caller_context);
 
-                println!(
+                debug!(
                     "[AFG] seed_authenticated_functions: find {} callsites in function = {}, block = {}, context = {:?}",
                     callsites.len(),
                     &point.caller,
@@ -506,7 +481,7 @@ impl<'m> AFGContextEngine<'m> {
             // ---------------------------------------------------------
 
             if reaches_return {
-                println!("[AFG] seed_authenticated_functions: reach return block");
+                debug!("[AFG] seed_authenticated_functions: reach return block");
                 self.propagate_return_to_callers(
                     &point.caller,
                     &point.caller_context,
@@ -545,7 +520,7 @@ impl<'m> AFGContextEngine<'m> {
             return;
         }
 
-        println!(
+        debug!(
             "[AFG] propagate_return_to_callers: propagate return from function={} ctx={:?} principal={:?}",
             returned_function, returned_context, principal,
         );
@@ -554,7 +529,7 @@ impl<'m> AFGContextEngine<'m> {
 
         // No callers => reached root, e.g. main.
         if callsites.is_empty() {
-            println!(
+            debug!(
                 "[AFG] propagate_return_to_callers: reached root function {}",
                 returned_function
             );
@@ -583,7 +558,7 @@ impl<'m> AFGContextEngine<'m> {
             )
         };
 
-        println!(
+        debug!(
             "[AFG] process_return_into_caller: caller={} block={} after callsite={:?}",
             caller, caller_block, callsite,
         );
@@ -595,7 +570,7 @@ impl<'m> AFGContextEngine<'m> {
         let later_callsites: Vec<PACallSite<'_>> =
             self.get_callsites_after_in_block(&caller, &caller_block, callsite.id, pos_mode);
 
-        println!(
+        debug!(
             "[AFG] process_return_into_caller: find {} later_callsites = {:?}",
             later_callsites.len(),
             later_callsites
@@ -610,7 +585,7 @@ impl<'m> AFGContextEngine<'m> {
         // ---------------------------------------------------------
 
         let mut reachable_blocks = HashSet::new();
-        println!(
+        debug!(
             "[AFG] process_return_into_caller: caller = {}, reachable blocks = {:?}",
             caller, reachable_blocks,
         );
@@ -629,7 +604,7 @@ impl<'m> AFGContextEngine<'m> {
             }
 
             let callsites = self.get_callsites_in_block(&caller, &block, &caller_context);
-            println!(
+            debug!(
                 "[AFG] process_return_into_caller: find {} callsites = {:?}",
                 callsites.len(),
                 callsites
@@ -645,7 +620,7 @@ impl<'m> AFGContextEngine<'m> {
         // ---------------------------------------------------------
 
         if reachable_blocks.contains("Return") {
-            println!(
+            debug!(
                 "[AFG] process_return_into_caller: authenticated continuation reaches return of {}",
                 caller
             );
@@ -681,74 +656,13 @@ impl<'m> AFGContextEngine<'m> {
             (callee.to_string(), callee_context)
         };
 
-        println!(
+        debug!(
             "[AFG] authenticated callsite {:?} seeds callee {}",
             callsite, callee_info.0,
         );
 
         seeds.push((callee_info, principal.clone()));
     }
-
-    // fn process_authenticated_return(
-    //     &mut self,
-    //     authenticated_function: &str,
-    //     principal: &PAContextElem,
-    //     seeds: &mut Vec<(FunctionKey, PAContextElem)>,
-    // ) {
-    //     println!(
-    //         "[AFG] process_authenticated_return: auth-function = {}",
-    //         authenticated_function
-    //     );
-
-    //     let callsites = self.get_callers_of_function(authenticated_function);
-
-    //     println!(
-    //         "[AFG] process_authenticated_return: find {} callsites",
-    //         callsites.len()
-    //     );
-
-    //     for caller_site in callsites {
-    //         let caller = caller_site.caller.to_string();
-
-    //         let block = caller_site.block.to_string();
-
-    //         let context = caller_site.context.clone();
-
-    //         println!(
-    //             "[AFG] process auth return {} -> caller={} block={} callsite={}",
-    //             authenticated_function, caller, block, caller_site.id,
-    //         );
-
-    //         // ---------------------------------------------------------
-    //         // 1. Calls occurring later in the SAME basic block
-    //         // ---------------------------------------------------------
-
-    //         let later_calls = self.get_callsites_after_in_block(&caller, &block, caller_site.id);
-
-    //         for callsite_id in later_calls {
-    //             self.seed_callsite_callee(callsite_id, principal, seeds);
-    //         }
-
-    //         // ---------------------------------------------------------
-    //         // 2. Calls in successor blocks
-    //         // ---------------------------------------------------------
-
-    //         let successor_blocks = self.get_normal_success_block(&caller, &block);
-
-    //         for successor in successor_blocks {
-    //             let reachable = self.normal_reachable_blocks(&caller, &successor);
-
-    //             for reachable_block in reachable {
-    //                 let callsites =
-    //                     self.get_callsites_in_block(&caller, &reachable_block, &context);
-
-    //                 for callsite in callsites {
-    //                     self.seed_callsite_callee(callsite, principal, seeds);
-    //                 }
-    //             }
-    //         }
-    //     }
-    // }
 
     fn seed_callsite_callee(
         &self,
@@ -766,7 +680,7 @@ impl<'m> AFGContextEngine<'m> {
 
         let callee_context = self.get_callee_context(&callsite);
 
-        println!(
+        debug!(
             "[AFG] authenticated continuation seeds {} at callsite {:?}",
             callee, callsite,
         );
@@ -807,7 +721,7 @@ impl<'m> AFGContextEngine<'m> {
             }
         }
 
-        println!(
+        debug!(
             "[AFG] propagate_function_principals (initial): #worklist = {}",
             worklist.len()
         );
@@ -815,7 +729,7 @@ impl<'m> AFGContextEngine<'m> {
         while let Some(((function, context), principal)) = worklist.pop_front() {
             let callsites = self.get_callsites_of_function(&function, &context);
 
-            println!(
+            debug!(
                 "[AFG] find {} callsites in function = {}, context = {:?}",
                 callsites.len(),
                 &function,
@@ -843,7 +757,7 @@ impl<'m> AFGContextEngine<'m> {
                     .insert(principal.clone());
 
                 if inserted {
-                    println!(
+                    debug!(
                         "[AFG] propagate principal {:?}: {} -> {:?}",
                         principal, function, key.1
                     );

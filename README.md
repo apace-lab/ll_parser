@@ -1,14 +1,14 @@
 # use llvm-ir
 
-https://github.com/cdisselkoen/llvm-ir
+https://github.com/cdisselkoen/llvm-ir (as library)
 
-https://github.com/cdisselkoen/llvm-ir-analysis
+https://github.com/cdisselkoen/llvm-ir-analysis (copied `call_graph.rs`, `control_flow_graph.rs`, `lib.rs`)
 
-https://github.com/cdisselkoen/llvm-ir-taint
+https://github.com/cdisselkoen/llvm-ir-taint (not used)
 
 
 
-## prepare
+## prepare to install
 `sudo apt install zlib1g-dev`
 
 We use llvm 19.1.7 (the most recent version supported by llvm-ir) and rustup 1.82.0 (the compatible version)

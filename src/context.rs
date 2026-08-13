@@ -92,14 +92,14 @@ impl PAContext {
         match self {
             PAContext::Global => &[],
             PAContext::Elements(elems) => elems.as_slice(),
-            PAContext::Semantics(elems) => &[],
+            PAContext::Semantics(_) => &[],
         }
     }
 
     pub fn semantics(&self) -> &[PAContextElem] {
         match self {
             PAContext::Global => &[],
-            PAContext::Elements(elems) => &[],
+            PAContext::Elements(_) => &[],
             PAContext::Semantics(elems) => elems.as_slice(),
         }
     }
