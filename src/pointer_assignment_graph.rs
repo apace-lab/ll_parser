@@ -18,6 +18,7 @@ use rustc_demangle::demangle;
 use std::collections::{BTreeMap, BTreeSet, HashMap, VecDeque};
 use std::error::Error;
 use std::fs::File;
+use std::hash::Hash;
 use std::io::Write;
 use std::time::Instant;
 use std::{format, println};
@@ -276,8 +277,11 @@ pub enum PAEdgeKind {
     /// dst = src[offset]: getelementptr when src has type
     GEP { indices: Vec<u64> },
 
-    /// GEP when source have no type
+    /// GEP when source have no type, e.g., const int
     ByteOffsetGEP { offset: i64 },
+
+    /// GEP when source is value/ref, e.g., %_9
+    UnknownOffsetGEP,
 
     /// dst = bitcast src
     BitCast,
@@ -426,6 +430,12 @@ pub struct PointerAssignmentGraph<'m> {
     /// node id -> MemCopy edges where this node is edge.dst, i.e., dst pointer -> memcopy edges
     pub memcpy_dst_edges: BTreeMap<PANodeId, Vec<PAEdge>>,
 
+    /// base object -> all known constant-offset field objects
+    pub byte_offset_field_objects: HashMap<PANodeId, BTreeSet<PANodeId>>,
+
+    // base object -> destinations of unknown-offset GEPs that depend on this base
+    pub unknown_offset_users: HashMap<PANodeId, BTreeSet<PANodeId>>,
+
     pub config: PAConfig,
 
     /// crate name of the entry (main) module; used for selective context: only
@@ -519,6 +529,8 @@ impl<'m> PointerAssignmentGraph<'m> {
             lhs2edges: BTreeMap::new(),
             store_dst_edges: BTreeMap::new(),
             memcpy_dst_edges: BTreeMap::new(),
+            byte_offset_field_objects: HashMap::new(),
+            unknown_offset_users: HashMap::new(),
             config: config,
             app_crate: String::new(),
             semantic_points: Vec::new(),
@@ -1025,30 +1037,41 @@ impl<'m> PointerAssignmentGraph<'m> {
                         );
 
                         match gep.source_element_type.as_ref() {
-                            llvm_ir::Type::IntegerType { bits: 8 } => {
+                            llvm_ir::Type::IntegerType { bits: 8 }
+                            | llvm_ir::Type::IntegerType { bits: 32 }
+                            | llvm_ir::Type::IntegerType { bits: 64 } => {
                                 // byte-offset GEP
                                 // e.g.,  %42 = getelementptr inbounds i8, ptr %41, i64 8
-                                if let Some(offset) = gep_single_constant_offset(&gep.indices) {
-                                    self.add_pag_edge(
-                                        self.get_nodekind_for_value_ref(
-                                            PAValueRef::Operand(&gep.address),
-                                            &function_name.clone(),
-                                        ),
-                                        self.get_nodekind_for_value_ref(
-                                            PAValueRef::Name {
-                                                name: &gep.dest,
-                                                ty: None,
-                                            },
-                                            &function_name.clone(),
-                                        ),
-                                        PAEdgeKind::ByteOffsetGEP { offset },
-                                        function_name.to_string(),
-                                        block_name.to_string(),
-                                        context.clone(),
-                                    );
+                                // and
+                                // %_18 = getelementptr inbounds ptr %_8, i64 %len
+                                let src = self.get_nodekind_for_value_ref(
+                                    PAValueRef::Operand(&gep.address),
+                                    &function_name.clone(),
+                                );
+                                let dst = self.get_nodekind_for_value_ref(
+                                    PAValueRef::Name {
+                                        name: &gep.dest,
+                                        ty: None,
+                                    },
+                                    &function_name.clone(),
+                                );
+
+                                let edge_kind = if let Some(offset) =
+                                    gep_single_constant_offset(&gep.indices)
+                                {
+                                    PAEdgeKind::ByteOffsetGEP { offset }
                                 } else {
-                                    println!("[PAG] no offset in GEP: {}", gep);
-                                }
+                                    PAEdgeKind::UnknownOffsetGEP
+                                };
+
+                                self.add_pag_edge(
+                                    src,
+                                    dst,
+                                    edge_kind,
+                                    function_name.to_string(),
+                                    block_name.to_string(),
+                                    context.clone(),
+                                );
                             }
 
                             llvm_ir::Type::StructType { .. }
@@ -1079,8 +1102,8 @@ impl<'m> PointerAssignmentGraph<'m> {
                             _ => {
                                 // unknown/general GEP
                                 println!(
-                                    "[PAG] unknow GEP source type = {:?}",
-                                    gep.source_element_type
+                                    "[PAG] unknow GEP source type = {:?} in {}",
+                                    gep.source_element_type, gep,
                                 );
                             }
                         }
@@ -1662,7 +1685,7 @@ impl<'m> PointerAssignmentGraph<'m> {
         )
     }
 
-    /// for field-sensitive (byte offset)
+    /// for field-sensitive (byte offset and unknown offset)
     /// object/struct-field -> use object-sensitive
     fn get_or_create_byte_offset_field_object(
         &mut self,
@@ -1674,9 +1697,8 @@ impl<'m> PointerAssignmentGraph<'m> {
         };
 
         let root_base = match &base_node.kind {
-            PANodeKind::FieldObject { base, .. } => base,
-
-            _ => &base_obj,
+            PANodeKind::FieldObject { base, .. } => *base,
+            _ => base_obj,
         };
 
         let offset_key = if offset >= 0 && offset <= 4096 {
@@ -1685,16 +1707,53 @@ impl<'m> PointerAssignmentGraph<'m> {
             BYTE_OFFSET_SUMMARY
         };
 
-        let base_context: PAContext = base_node.context.clone();
+        let base_context = base_node.context.clone();
 
-        self.get_or_create_node(
+        let field_obj = self.get_or_create_node(
             PANodeKind::FieldObject {
-                base: *root_base,
+                base: root_base,
                 field: vec![BYTE_OFFSET_MARKER, offset_key],
                 field_type: None,
             },
             base_context,
-        )
+        );
+
+        /*
+         * Important:
+         * BTreeSet::insert tells us whether this field object is newly
+         * discovered for root_base.
+         */
+        let is_new = self
+            .byte_offset_field_objects
+            .entry(root_base)
+            .or_default()
+            .insert(field_obj);
+
+        if is_new {
+            self.notify_unknown_offset_users(root_base, field_obj);
+        }
+
+        field_obj
+    }
+
+    /// update unknown offset whenever byte offset changs
+    fn notify_unknown_offset_users(&mut self, root_base: PANodeId, new_field_obj: PANodeId) {
+        let users = self
+            .unknown_offset_users
+            .get(&root_base)
+            .cloned()
+            .unwrap_or_default();
+
+        if users.is_empty() {
+            return;
+        }
+
+        let mut delta = BTreeSet::new();
+        delta.insert(new_field_obj);
+
+        for dst in users {
+            self.add_points_to_and_enqueue(dst, &delta);
+        }
     }
 
     /// add the new edge with lhs's pts (Store is different) to worklist
@@ -2833,6 +2892,14 @@ impl<'m> PointerAssignmentGraph<'m> {
                         self.solve_byte_offset_gep(edge.src, edge.dst, offset, &delta)
                     }
 
+                    PAEdgeKind::UnknownOffsetGEP => {
+                        let PAWorkDelta::Src(delta) = item.delta else {
+                            continue;
+                        };
+
+                        self.solve_unknown_offset_gep(edge.src, edge.dst, &delta)
+                    }
+
                     PAEdgeKind::BitCast => {
                         let PAWorkDelta::Src(delta) = item.delta else {
                             continue;
@@ -3429,6 +3496,50 @@ impl<'m> PointerAssignmentGraph<'m> {
         self.add_points_to_and_enqueue(dst, &out)
     }
 
+    fn solve_unknown_offset_gep(
+        &mut self,
+        _src: PANodeId,
+        dst: PANodeId,
+        delta: &BTreeSet<PANodeId>,
+    ) -> bool {
+        if delta.is_empty() {
+            return false;
+        }
+
+        let mut out = BTreeSet::new();
+
+        for base_obj in delta {
+            let root_base = {
+                let Some(base_node) = self.nodes.get(base_obj) else {
+                    continue;
+                };
+
+                match &base_node.kind {
+                    PANodeKind::FieldObject { base, .. } => *base,
+                    _ => *base_obj,
+                }
+            };
+
+            /*
+             * Remember that dst depends on every byte-offset field
+             * that may ever be discovered for root_base.
+             */
+            self.unknown_offset_users
+                .entry(root_base)
+                .or_default()
+                .insert(dst);
+
+            /*
+             * Add all fields known at this point.
+             */
+            if let Some(fields) = self.byte_offset_field_objects.get(&root_base) {
+                out.extend(fields.iter().copied());
+            }
+        }
+
+        self.add_points_to_and_enqueue(dst, &out)
+    }
+
     /// BitCast constraint:
     ///     dst = src
     /// we create:
@@ -4004,6 +4115,7 @@ impl<'m> PointerAssignmentGraph<'m> {
                 PAEdgeKind::Store => "Store",
                 PAEdgeKind::GEP { .. } => "GEP",
                 PAEdgeKind::ByteOffsetGEP { .. } => "ByteOffsetGEP",
+                PAEdgeKind::UnknownOffsetGEP => "UnknownOffsetGEP",
                 PAEdgeKind::AddrSpaceCast { .. } => "AddrSpaceCast",
                 PAEdgeKind::BitCast { .. } => "BitCast",
                 PAEdgeKind::IntToPtr { .. } => "IntToPtr",
