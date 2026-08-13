@@ -83,6 +83,10 @@ RUSTFLAGS=-Awarnings RUST_LOG=ll_parser=debug  cargo run -q -- tests/pag/basic/s
 ```
 
 
+
+
+### AFG
+
 We provide default files for `llm_api_functions.json` and `ac_functions.json` in `signatures`. If you want to use them, you can run:
 ```bash
 RUSTFLAGS=-Awarnings cargo run -q -- tests/llm_api_ac.ll --pag=afg
