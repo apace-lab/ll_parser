@@ -13,6 +13,18 @@ use std::println;
 type FunctionKey = (String, PAContext);
 type ReturnPropagationKey = (String, PAContext, PAContextElem);
 
+/// When propagate_return_to_callers() is first called from seed_authenticated_functions(),
+///    the authentication has already completed inside the AC-containing function. When returned to its caller,
+///    process only statements/calls after the call that just returned, so use pos + 1.
+/// When propagate_return_to_callers() recursively climbs from one caller to its caller,
+///    the current caller’s own return needs to remain part of the propagation chain. In that case,
+///    including the current callsite with pos can be necessary to preserve the return path.
+#[derive(Debug, Clone, Copy)]
+enum ReturnPropagationMode {
+    AfterReturnedCall,  // pos + 1
+    IncludeCurrentCall, // pos
+}
+
 #[derive(Debug, Clone)]
 pub enum SemanticPointKind {
     /// Password/JWT/token/etc. authentication check.
@@ -305,6 +317,7 @@ impl<'m> AFGContextEngine<'m> {
         caller: &str,
         block: &str,
         callsite_id: usize,
+        pos_mode: ReturnPropagationMode,
     ) -> Vec<PACallSite<'m>> {
         println!(
             "[AFG] get callsites for caller = {}, block = {}, callsite_id = {}",
@@ -335,9 +348,13 @@ impl<'m> AFGContextEngine<'m> {
             return Vec::new();
         };
 
-        println!("find pos = {}", pos);
+        let start_pos = match pos_mode {
+            ReturnPropagationMode::AfterReturnedCall => pos + 1,
+            ReturnPropagationMode::IncludeCurrentCall => pos,
+        };
+        println!("find pos = {}, start_pos = {}", pos, start_pos);
 
-        let ids = callsites.iter().skip(pos).copied().collect();
+        let ids = callsites.iter().skip(start_pos).copied().collect();
 
         return self.get_callsites_by_ids(ids);
     }
@@ -468,6 +485,7 @@ impl<'m> AFGContextEngine<'m> {
                     &principal,
                     &mut seeds,
                     &mut return_visited,
+                    ReturnPropagationMode::AfterReturnedCall,
                 );
             }
         }
@@ -487,6 +505,7 @@ impl<'m> AFGContextEngine<'m> {
         principal: &PAContextElem,
         seeds: &mut Vec<(FunctionKey, PAContextElem)>,
         visited: &mut HashSet<ReturnPropagationKey>,
+        pos_mode: ReturnPropagationMode,
     ) {
         let visit_key = (
             returned_function.to_string(),
@@ -512,7 +531,7 @@ impl<'m> AFGContextEngine<'m> {
         }
 
         for caller_callsite in callsites {
-            self.process_return_into_caller(caller_callsite, principal, seeds, visited);
+            self.process_return_into_caller(caller_callsite, principal, seeds, visited, pos_mode);
         }
     }
 
@@ -522,6 +541,7 @@ impl<'m> AFGContextEngine<'m> {
         principal: &PAContextElem,
         seeds: &mut Vec<(FunctionKey, PAContextElem)>,
         visited: &mut HashSet<ReturnPropagationKey>,
+        pos_mode: ReturnPropagationMode,
     ) {
         // Extract owned information first.
         let (caller, caller_block, caller_context) = {
@@ -533,7 +553,7 @@ impl<'m> AFGContextEngine<'m> {
         };
 
         println!(
-            "[AFG] return -> caller={} block={} after callsite={:?}",
+            "[AFG] process_return_into_caller: caller={} block={} after callsite={:?}",
             caller, caller_block, callsite,
         );
 
@@ -542,7 +562,7 @@ impl<'m> AFGContextEngine<'m> {
         // ---------------------------------------------------------
 
         let later_callsites: Vec<PACallSite<'_>> =
-            self.get_callsites_after_in_block(&caller, &caller_block, callsite.id);
+            self.get_callsites_after_in_block(&caller, &caller_block, callsite.id, pos_mode);
 
         println!(
             "[AFG] find {} later_callsites = {:?}",
@@ -559,15 +579,14 @@ impl<'m> AFGContextEngine<'m> {
         // ---------------------------------------------------------
 
         let mut reachable_blocks = HashSet::new();
-
-        for successor in self.get_normal_success_block(&caller, &caller_block) {
-            reachable_blocks.extend(self.normal_reachable_blocks(&caller, &successor));
-        }
-
         println!(
             "[AFG] caller continuation {} reachable blocks = {:?}",
             caller, reachable_blocks,
         );
+
+        if let Some(successor) = self.get_normal_success_block(&caller, &caller_block) {
+            reachable_blocks.extend(self.normal_reachable_blocks(&caller, &successor));
+        }
 
         // ---------------------------------------------------------
         // C. Seed calls in those blocks
@@ -596,7 +615,14 @@ impl<'m> AFGContextEngine<'m> {
                 caller
             );
 
-            self.propagate_return_to_callers(&caller, &caller_context, principal, seeds, visited);
+            self.propagate_return_to_callers(
+                &caller,
+                &caller_context,
+                principal,
+                seeds,
+                visited,
+                ReturnPropagationMode::IncludeCurrentCall,
+            );
         }
     }
 
