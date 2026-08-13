@@ -1,101 +1,9 @@
 use llvm_ir::Module;
 use std::env;
 use std::error::Error;
-use std::fs::File;
-use std::io::Write;
 
+use ll_parser::util;
 use ll_parser::{CrossModuleAnalysis, ModuleAnalysis};
-
-fn has_flag(args: &[String], flag: &str) -> bool {
-    args.iter().any(|arg| arg == flag)
-}
-
-fn get_flag_value<'a>(args: &'a [String], flag_prefix: &str) -> Option<&'a str> {
-    args.iter().find_map(|arg| arg.strip_prefix(flag_prefix))
-}
-
-fn write_module_to_file(module: &Module, output_txt: &str) -> Result<(), Box<dyn Error>> {
-    let mut file = File::create(output_txt)?;
-
-    writeln!(file, "=== Module ===")?;
-    writeln!(file, "name: {}", module.name)?;
-    writeln!(file, "source_file_name: {}", module.source_file_name)?;
-    writeln!(file, "data_layout: {:?}", module.data_layout)?;
-    writeln!(file, "target_triple: {:?}", module.target_triple)?;
-    writeln!(file)?;
-
-    writeln!(file, "=== Summary ===")?;
-    writeln!(file, "defined functions: {}", module.functions.len())?;
-    writeln!(
-        file,
-        "function declarations: {}",
-        module.func_declarations.len()
-    )?;
-    writeln!(file, "global variables: {}", module.global_vars.len())?;
-    writeln!(file, "global aliases: {}", module.global_aliases.len())?;
-    writeln!(file, "global ifuncs: {}", module.global_ifuncs.len())?;
-    writeln!(file)?;
-
-    writeln!(file, "=== Function Declarations ===")?;
-    for decl in &module.func_declarations {
-        writeln!(file, "declare {}", decl.name)?;
-        writeln!(file, "  return_type: {}", decl.return_type)?;
-        writeln!(file, "  parameters:")?;
-
-        for param in &decl.parameters {
-            writeln!(file, "    {:?}", param)?;
-        }
-
-        writeln!(file)?;
-    }
-
-    writeln!(file, "=== Global Variables ===")?;
-    for gv in &module.global_vars {
-        writeln!(file, "{:?}", gv)?;
-    }
-    writeln!(file)?;
-
-    writeln!(file, "=== Global Aliases ===")?;
-    for alias in &module.global_aliases {
-        writeln!(file, "{:?}", alias)?;
-    }
-    writeln!(file)?;
-
-    writeln!(file, "=== Global IFuncs ===")?;
-    for ifunc in &module.global_ifuncs {
-        writeln!(file, "{:?}", ifunc)?;
-    }
-    writeln!(file)?;
-
-    writeln!(file, "=== Defined Functions ===")?;
-    for func in &module.functions {
-        writeln!(file, "function: {}", func.name)?;
-        writeln!(file, "  return_type: {}", func.return_type)?;
-        writeln!(file, "  parameters:")?;
-
-        for param in &func.parameters {
-            writeln!(file, "    {:?}", param)?;
-        }
-
-        writeln!(file, "  basic_blocks: {}", func.basic_blocks.len())?;
-
-        for block in &func.basic_blocks {
-            writeln!(file, "  basic block: {}", block.name)?;
-            writeln!(file, "    instructions:")?;
-
-            for instr in &block.instrs {
-                writeln!(file, "      {:?}", instr)?;
-            }
-
-            writeln!(file, "    terminator:")?;
-            writeln!(file, "      {:?}", block.term)?;
-        }
-
-        writeln!(file)?;
-    }
-
-    Ok(())
-}
 
 fn main() -> Result<(), Box<dyn Error>> {
     let args: Vec<String> = env::args().collect();
@@ -133,19 +41,19 @@ fn main() -> Result<(), Box<dyn Error>> {
     }
 
     // optionally write the parsed module(s) for debugging
-    if has_flag(&args, "--info") {
+    if util::has_flag(&args, "--info") {
         for (i, module) in modules.iter().enumerate() {
             let output_txt = match modules.len() {
                 1 => "parsed_module.txt".to_string(),
                 _ => format!("parsed_module_{i}.txt"),
             };
-            write_module_to_file(module, &output_txt)?;
+            util::write_module_to_file(module, &output_txt)?;
             println!("Wrote parsed module info to: {}", output_txt);
         }
     }
 
     // print cfg for each function, per module: default from llvm-ir
-    if has_flag(&args, "--cfg") {
+    if util::has_flag(&args, "--cfg") {
         let mut file = std::fs::File::create("cfg.txt")?;
         for module in &modules {
             let analysis = ModuleAnalysis::new(module);
@@ -163,14 +71,14 @@ fn main() -> Result<(), Box<dyn Error>> {
     let mut analysis = CrossModuleAnalysis::new(modules.iter());
 
     // print cg (cross-module): default from llvm-ir
-    if has_flag(&args, "--cg") {
+    if util::has_flag(&args, "--cg") {
         let _ = analysis.call_graph().print_call_graph();
         println!("Wrote call graph to cg.txt");
     }
 
     // generate pag (records context points during the analysis if catalogs were set)
-    if let Some(mode) = get_flag_value(&args, "--pag=") {
-        let k = get_flag_value(&args, "--k=");
+    if let Some(mode) = util::get_flag_value(&args, "--pag=") {
+        let k = util::get_flag_value(&args, "--k=");
         match mode {
             "kcfa" | "kobj" | "kmix" => {
                 // must have k
@@ -192,17 +100,32 @@ fn main() -> Result<(), Box<dyn Error>> {
 
             "afg" => {
                 // load context catalogs if both are given, so the analysis records context points
-                let llm_api_path = get_flag_value(&args, "--api=");
-                let ac_path = get_flag_value(&args, "--ac=");
+                let llm_api_path_cli = util::get_flag_value(&args, "--api=");
+                let ac_path_cli = util::get_flag_value(&args, "--ac=");
+
+                let llm_api_path = util::resolve_signature_file(
+                    llm_api_path_cli.as_deref(),
+                    "llm_api_functions.json",
+                    "LLM API signature file",
+                );
+
+                let ac_path = util::resolve_signature_file(
+                    ac_path_cli.as_deref(),
+                    "ac_functions.json",
+                    "access-control signature file",
+                );
+
                 if let (Some(llm_api_path), Some(ac_path)) = (llm_api_path, ac_path) {
                     let llm_api =
-                        ll_parser::signature::load_signatures(std::path::Path::new(llm_api_path))?;
-                    let ac = ll_parser::signature::load_signatures(std::path::Path::new(ac_path))?;
+                        ll_parser::signature::load_signatures(std::path::Path::new(&llm_api_path))?;
+                    let ac = ll_parser::signature::load_signatures(std::path::Path::new(&ac_path))?;
+
                     println!(
                         "Loaded {} LLM API and {} AC signatures",
                         llm_api.len(),
                         ac.len()
                     );
+
                     analysis.set_context_catalogs(llm_api, ac);
 
                     let pag: std::cell::Ref<'_, ll_parser::PointerAssignmentGraph<'_>> =

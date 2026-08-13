@@ -12,9 +12,8 @@ mod control_flow_graph;
 mod dominator_tree;
 mod functions_by_type;
 mod pointer_assignment_graph;
-// mod security_analysis;
-// mod security_facts;
 pub mod signature;
+pub mod util;
 
 use crate::afg_engine::AFGContextEngine;
 pub use crate::call_graph::CallGraph;
@@ -23,7 +22,6 @@ pub use crate::control_flow_graph::{CFGNode, ControlFlowGraph};
 pub use crate::dominator_tree::{DominatorTree, PostDominatorTree};
 pub use crate::functions_by_type::FunctionsByType;
 pub use crate::pointer_assignment_graph::{PAEdge, PANode, PointerAssignmentGraph};
-// pub use crate::security_analysis::SecurityAnalysis;
 use llvm_ir::{Function, Module};
 use log::debug;
 use std::cell::{Ref, RefCell};

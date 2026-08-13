@@ -83,6 +83,25 @@ RUSTFLAGS=-Awarnings RUST_LOG=ll_parser=debug  cargo run -q -- tests/pag/basic/s
 ```
 
 
+We provide default files for `llm_api_functions.json` and `ac_functions.json` in `signatures`. If you want to use them, you can run:
+```bash
+RUSTFLAGS=-Awarnings cargo run -q -- tests/llm_api_ac.ll --pag=afg
+```
+which uses our default files.
+Or you can specify your own files:
+```bash
+RUSTFLAGS=-Awarnings cargo run -q -- \
+    tests/llm_api_ac.ll \
+    --pag=afg \
+    --api=signatures/llm_api_functions.json \
+    --ac=signatures/ac_functions.json
+```
+
+
+
+
+
+
 
 ### how to compile a rust project to .ll
 ```bash
@@ -247,4 +266,9 @@ then run `cargo update -p indexmap --precise 2.7.1` to downgrade the crate
 
 
 ## TODO: 
+
+## commands
+```bash
+RUSTFLAGS=-Awarnings cargo run -q -- tests/llm_api_ac.ll --pag=afg --api=signatures/llm_api_functions.json --ac=signatures/ac_functions.json &> console.txt
+```
 
