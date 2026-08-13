@@ -1,0 +1,12 @@
+[package]
+name = "llm-api-ac"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85"
+
+[dependencies]
+tokio = { version = "1", features = ["full"] }
+argon2 = { version = "0.5.3", features = ["std"] }
+async-openai = { version = "0.41", features = ["chat-completion"] }
+ollama-rs = "0.3"
+rpassword = "7"
