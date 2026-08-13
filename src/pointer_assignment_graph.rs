@@ -1565,11 +1565,11 @@ impl<'m> PointerAssignmentGraph<'m> {
     pub fn get_node_by_id(&self, id: PANodeId) -> Option<PANode> {
         let node = self.nodes.get(&id);
         let Some(node) = node else {
-            println!("[PAG] get_node_by_id: cannot find node with id = {}", id);
+            debug!("[PAG] get_node_by_id: cannot find node with id = {}", id);
             return None;
         };
 
-        println!("[PAG] get_node_by_id: find id = {} -> node = {}", id, node);
+        debug!("[PAG] get_node_by_id: find id = {} -> node = {}", id, node);
 
         Some(node.clone())
     }
@@ -2437,7 +2437,7 @@ impl<'m> PointerAssignmentGraph<'m> {
     ) {
         let callee_name = callee.name.as_str();
         let arguments = self.get_callsite_arguments(&callsite.kind);
-        let mut idx2nodeid: HashMap<usize, PANodeId> = HashMap::new();
+        let mut idx2arg_nodeid: HashMap<usize, PANodeId> = HashMap::new();
 
         debug!("[PAG] add_constraints_for_call: callee = {}", callee_name);
 
@@ -2473,7 +2473,7 @@ impl<'m> PointerAssignmentGraph<'m> {
                     callee_context,
                 );
 
-                idx2nodeid.insert(idx, dst_id);
+                idx2arg_nodeid.insert(idx, src_id);
             }
         }
 
@@ -2588,7 +2588,7 @@ impl<'m> PointerAssignmentGraph<'m> {
         };
         // normal flow ends here
 
-        // for AFG, check if the callsite matches any context signature
+        /// for AFG, check if the callsite matches any context signature
         let matched = (self.config.policy == PAContextSelectPolicy::AFG)
             .then(|| self.config.context_signatures.as_ref())
             .flatten()
@@ -2603,15 +2603,29 @@ impl<'m> PointerAssignmentGraph<'m> {
                 context_point.matched_fn_name, context_point.category, context_point.strategy
             );
 
-            let mut entries: Vec<(usize, PANodeId)> = idx2nodeid
-                .iter()
-                .map(|(&idx, &node_id)| (idx, node_id))
-                .collect();
+            // let mut entries: Vec<(usize, PANodeId)> = idx2arg_nodeid
+            //     .iter()
+            //     .map(|(&idx, &node_id)| (idx, node_id))
+            //     .collect();
 
-            entries.sort_by_key(|(idx, _)| *idx);
+            // entries.sort_by_key(|(idx, _)| *idx);
 
-            let arg_node_ids: Vec<PANodeId> =
-                entries.into_iter().map(|(_, node_id)| node_id).collect();
+            // let arg_node_ids: Vec<PANodeId> =
+            //     entries.into_iter().map(|(_, node_id)| node_id).collect();
+
+            // select arguments relate to request/prompt and return/sret
+            let mut related_nodeids: Vec<PANodeId> = Vec::new();
+            if let Some(prompt_idx) = context_point.prompt_arg_index {
+                if let Some(prompt_nodeid) = idx2arg_nodeid.get(&prompt_idx) {
+                    related_nodeids.push(*prompt_nodeid);
+                }
+            }
+
+            if let Some(request_idx) = context_point.request_index {
+                if let Some(request_nodeid) = idx2arg_nodeid.get(&request_idx) {
+                    related_nodeids.push(*request_nodeid);
+                }
+            }
 
             // special handling for authentication and llm-api categories
             // TODO: other categories ??
@@ -2648,11 +2662,11 @@ impl<'m> PointerAssignmentGraph<'m> {
                     callee: Some(callee_name.to_string()),
                     caller_context: caller_context.clone(),
 
-                    argument_nodes: arg_node_ids.clone(),
+                    argument_nodes: related_nodeids,
                     result_node: result_id,
                 };
 
-                println!("[AFG] register semantic point = {:?}", semantic_point);
+                println!("[AFG] register semantic point = {}", semantic_point);
 
                 self.semantic_points.push(semantic_point);
             }
@@ -5069,6 +5083,7 @@ pub fn normalize_block_label(name: &str) -> String {
         .to_string()
 }
 
+/// check whether the block name is for abnormal executions
 pub fn is_cleanup_block_name(name: &str) -> bool {
     name == "cleanup"
         || name.starts_with("cleanup.")

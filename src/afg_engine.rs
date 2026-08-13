@@ -8,6 +8,7 @@ use crate::PAEdge;
 use crate::PointerAssignmentGraph;
 use std::collections::BTreeMap;
 use std::collections::{HashMap, HashSet, VecDeque};
+use std::fmt;
 use std::println;
 
 type FunctionKey = (String, PAContext);
@@ -60,8 +61,29 @@ pub struct SemanticPoint {
     pub callee: Option<String>,
     pub caller_context: PAContext,
 
+    // Actual argument nodes at the callsite.
     pub argument_nodes: Vec<PANodeId>,
+
+    // Actual caller-side result, including normalized sret.
     pub result_node: Option<PANodeId>, // maybe sret
+}
+
+impl fmt::Display for SemanticPoint {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        return write!(
+            f,
+            // "SemanticPoint {{ callsite_id={}, kind={:?}, caller={}, block={}, callee={}, args={:?}, result={:?}, context={:?} }}",
+            "SemanticPoint {{ callsite_id={}, kind={:?}, caller={}, args={:?}, result={:?} }}",
+            self.callsite_id,
+            self.kind,
+            self.caller,
+            // self.block,
+            // self.callee.as_deref().unwrap_or("<unknown>"),
+            self.argument_nodes,
+            self.result_node,
+            // self.caller_context,
+        );
+    }
 }
 
 // -----------------------------------------------------------------------------
@@ -312,7 +334,7 @@ impl<'m> AFGContextEngine<'m> {
         return self.get_callsites_by_ids(ids.to_vec());
     }
 
-    pub fn get_callsites_after_in_block(
+    fn get_callsites_after_in_block(
         &self,
         caller: &str,
         block: &str,
@@ -332,10 +354,13 @@ impl<'m> AFGContextEngine<'m> {
             return Vec::new();
         };
 
-        println!("current callsites = {:?}", callsites);
+        println!(
+            "[AFG] get_callsites_after_in_block: current callsites = {:?}",
+            callsites
+        );
         for cs in callsites {
             if let Some(cs) = self.callsites.get(cs) {
-                println!("    {:?}", cs);
+                println!("[AFG]     {:?}", cs);
             }
         }
 
@@ -352,7 +377,7 @@ impl<'m> AFGContextEngine<'m> {
             ReturnPropagationMode::AfterReturnedCall => pos + 1,
             ReturnPropagationMode::IncludeCurrentCall => pos,
         };
-        println!("find pos = {}, start_pos = {}", pos, start_pos);
+        println!("[AFG] find pos = {}, start_pos = {}", pos, start_pos);
 
         let ids = callsites.iter().skip(start_pos).copied().collect();
 
@@ -428,19 +453,22 @@ impl<'m> AFGContextEngine<'m> {
 
             let Some(success_block) = self.get_normal_success_block(&point.caller, &point.block)
             else {
-                println!("[AFG] AC {}: no success block", point.callsite_id);
+                println!(
+                    "[AFG] seed_authenticated_functions: auth_callsite = {}: no success block",
+                    point.callsite_id
+                );
                 continue;
             };
 
             println!(
-                "[AFG] AC {} success continuation: {}::{}",
+                "[AFG] seed_authenticated_functions: auth_callsite = {} success continuation: {}::{}",
                 point.callsite_id, point.caller, success_block
             );
 
             let reachable_blocks = self.normal_reachable_blocks(&point.caller, &success_block);
 
             println!(
-                "[AFG] AC {} reachable authenticated blocks = {:?}",
+                "[AFG] seed_authenticated_functions: auth_callsite = {} reachable authenticated blocks = {:?}",
                 point.callsite_id, reachable_blocks
             );
 
@@ -454,7 +482,7 @@ impl<'m> AFGContextEngine<'m> {
                     self.get_callsites_in_block(&point.caller, &block, &point.caller_context);
 
                 println!(
-                    "[AFG] find {} callsites in function = {}, block = {}, context = {:?}",
+                    "[AFG] seed_authenticated_functions: find {} callsites in function = {}, block = {}, context = {:?}",
                     callsites.len(),
                     &point.caller,
                     &block,
@@ -518,7 +546,7 @@ impl<'m> AFGContextEngine<'m> {
         }
 
         println!(
-            "[AFG] propagate return from function={} ctx={:?} principal={:?}",
+            "[AFG] propagate_return_to_callers: propagate return from function={} ctx={:?} principal={:?}",
             returned_function, returned_context, principal,
         );
 
@@ -526,7 +554,10 @@ impl<'m> AFGContextEngine<'m> {
 
         // No callers => reached root, e.g. main.
         if callsites.is_empty() {
-            println!("[AFG] reached root function {}", returned_function);
+            println!(
+                "[AFG] propagate_return_to_callers: reached root function {}",
+                returned_function
+            );
             return;
         }
 
@@ -565,7 +596,7 @@ impl<'m> AFGContextEngine<'m> {
             self.get_callsites_after_in_block(&caller, &caller_block, callsite.id, pos_mode);
 
         println!(
-            "[AFG] find {} later_callsites = {:?}",
+            "[AFG] process_return_into_caller: find {} later_callsites = {:?}",
             later_callsites.len(),
             later_callsites
         );
@@ -580,7 +611,7 @@ impl<'m> AFGContextEngine<'m> {
 
         let mut reachable_blocks = HashSet::new();
         println!(
-            "[AFG] caller continuation {} reachable blocks = {:?}",
+            "[AFG] process_return_into_caller: caller = {}, reachable blocks = {:?}",
             caller, reachable_blocks,
         );
 
@@ -598,7 +629,11 @@ impl<'m> AFGContextEngine<'m> {
             }
 
             let callsites = self.get_callsites_in_block(&caller, &block, &caller_context);
-            println!("[AFG] find {} callsites = {:?}", callsites.len(), callsites);
+            println!(
+                "[AFG] process_return_into_caller: find {} callsites = {:?}",
+                callsites.len(),
+                callsites
+            );
 
             for callsite in callsites {
                 self.seed_authenticated_callsite(callsite, principal, seeds);
@@ -611,7 +646,7 @@ impl<'m> AFGContextEngine<'m> {
 
         if reachable_blocks.contains("Return") {
             println!(
-                "[AFG] authenticated continuation reaches return of {}",
+                "[AFG] process_return_into_caller: authenticated continuation reaches return of {}",
                 caller
             );
 
@@ -1036,10 +1071,10 @@ impl<'m> AFGContextEngine<'m> {
                 continue;
             }
 
-            println!("\n[NODE {:?}]", node_id);
-
             if let Some(node) = self.pag.get_node_by_id(node_id) {
-                println!("  kind = {:?}", node.kind);
+                println!("n{} = {:?}", node_id, node);
+            } else {
+                println!("n{} cannot find node by id", node_id);
             }
 
             for ctx in contexts {
@@ -1054,7 +1089,7 @@ impl<'m> AFGContextEngine<'m> {
                         function,
                     } => {
                         println!(
-                            "  llm: callsite={} provider={} function={}",
+                            "  llm: callsite_id={} provider={} function={}",
                             callsite_id, provider, function
                         );
                     }
@@ -1068,7 +1103,7 @@ impl<'m> AFGContextEngine<'m> {
     }
 
     fn print_llm_flows(&self) {
-        println!("\n========== LLM FLOWS ==========");
+        println!("\n========== LLM API FLOWS ==========");
 
         for point in &self.pag.semantic_points {
             let SemanticPointKind::LlmCall { provider, .. } = &point.kind else {
@@ -1076,30 +1111,29 @@ impl<'m> AFGContextEngine<'m> {
             };
 
             println!(
-                "\nLLM callsite {}: {}",
+                "LLM callsite id = {}, callee = {}",
                 point.callsite_id,
                 point.callee.as_deref().unwrap_or("<unknown>")
             );
 
             println!("  provider: {}", provider.as_deref().unwrap_or("unknown"));
-
             println!("  arguments:");
 
-            for arg in &point.argument_nodes {
-                print!("    {:?}: ", arg);
+            for arg_id in &point.argument_nodes {
+                print!("    n{:?}: ", arg_id);
 
-                let principals = self.principals_for_node(*arg);
+                let principals = self.principals_for_node(*arg_id);
 
                 if principals.is_empty() {
                     println!("no principal");
                 } else {
-                    println!("principal(s) {:?}", principals);
+                    println!("Principal(s) auth_callsite id(s) = {:?}", principals);
                 }
             }
 
             match point.result_node {
                 Some(result) => {
-                    println!("  result: {:?}", result);
+                    println!("  result: n{:?}", result);
 
                     if let Some(contexts) = self.node_contexts.get(&result) {
                         for ctx in contexts {

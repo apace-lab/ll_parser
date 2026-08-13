@@ -84,6 +84,15 @@ RUSTFLAGS=-Awarnings RUST_LOG=ll_parser=debug  cargo run -q -- tests/pag/basic/s
 
 
 
+### how to compile a rust project to .ll
+```bash
+cargo rustc -- --emit=llvm-ir
+```
+
+
+
+
+
 ### kCFA, kObj, kMix, AFG
 #### Good to go
 - kCFA: should work fine
@@ -124,16 +133,17 @@ rustc main.rs --crate-name llm_ac_demo --emit=llvm-ir -o llm_ac_demo.ll
 
 
 
-## speciak handling 
+## special handling 
 - `on_the_fly`
 - `skip_cleanup_blocks`
 - `vtable`
 
 
 ## special Rust fuctions (in `handle_special_rust_functions`)
-- memcpy (done)
-
-
+- llvm.memcpy 
+- heap allocation (`__rust_alloc`, `alloc::alloc::alloc`, `raw_vec::RawVec`)
+- deref (`<T as core::ops::deref::Deref>::deref`)
+- clone (`<alloc::sync::Arc<T, A> as core::clone::Clone>::clone`)
 
 
 
@@ -163,7 +173,9 @@ RUSTFLAGS=-Awarnings cargo run -q --release -- /tmp/chatgpt_lencx.ll --pag \
 
 
 
-### issues when compiling ...
+## issues when compiling ...
+
+### compile error: 
 ```bash
 error: failed to run custom build command for `openssl-sys v0.9.87`
 ...
@@ -185,25 +197,6 @@ Package javascriptcoregtk-4.0 was not found in the pkg-config search path.
   to the PKG_CONFIG_PATH environment variable
 ```
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-## issues you may see
 
 ### compile error: 
 ```bash
@@ -249,82 +242,9 @@ then run `cargo update -p indexmap --precise 2.7.1` to downgrade the crate
 
 
 
+
+
+
+
 ## TODO: 
-- model the other edges (bitcast, phi, select) -> currently just simple copy (done)
-- performance 
-  - skip visiting certain functions: see console output "[PAG] enqueue newly reachable function xxx" (done)
-    - e.g., _ZN4core3cmp6min_by17ha4cfc0b0d5a7f758E
-  - handle special rust functions
-    - e.g., memcpy (done)
-  - adhoc for tokio and certain functions (skip the long and unnecessary callchain and their constraints) 
-    - but make sure we can still reach our closures, e.g., _ZN4main16spawn_user_query28_$u7b$$u7b$closure$u7d$$u7d$17hb7b958eb69c4a9bcE
-
-
-
-### To model: the goal (temp) is to make `_ZN4main16spawn_user_query28_$u7b$$u7b$closure$u7d$$u7d$17hb7b958eb69c4a9bcE` work
-
-"_ZN4core6result19Result$LT$T$C$E$GT$6unwrap17h7b56c101e767f365E.exit23": ; preds = %bb5
-  %41 = getelementptr inbounds %"core::result::Result<std::sync::mutex::MutexGuard<'_, std::collections::hash::map::HashMap<alloc::string::String, alloc::string::String>>, std::sync::poison::PoisonError<std::sync::mutex::MutexGuard<'_, std::collections::hash::map::HashMap<alloc::string::String, alloc::string::String>>>>::Ok", ptr %_13, i32 0, i32 1
-  %t.0.i20 = load ptr, ptr %41, align 8, !nonnull !4, !align !8, !noundef !4
-  %42 = getelementptr inbounds i8, ptr %41, i64 8
-  %43 = load i8, ptr %42, align 8, !range !9, !noundef !4
-  %t.1.i21 = trunc i8 %43 to i1
-  %44 = insertvalue { ptr, i1 } poison, ptr %t.0.i20, 0
-  %45 = insertvalue { ptr, i1 } %44, i1 %t.1.i21, 1
-  br label %bb6
-
-bb6:                                              ; preds = %"_ZN4core6result19Result$LT$T$C$E$GT$6unwrap17h7b56c101e767f365E.exit23"
-  %46 = extractvalue { ptr, i1 } %45, 0
-  %47 = extractvalue { ptr, i1 } %45, 1
-  store ptr %46, ptr %map, align 8
-  %48 = getelementptr inbounds i8, ptr %map, i64 8
-  %49 = zext i1 %47 to i8
-  store i8 %49, ptr %48, align 8
-; invoke <std::sync::mutex::MutexGuard<T> as core::ops::deref::Deref>::deref
-  %_17 = invoke align 8 ptr @"_ZN81_$LT$std..sync..mutex..MutexGuard$LT$T$GT$$u20$as$u20$core..ops..deref..Deref$GT$5deref17h2594c3c195e96660E"(ptr align 8 %map)
-          to label %bb7 unwind label %cleanup4
-
-
-bb7:                                              ; preds = %bb6
-; invoke std::collections::hash::map::HashMap<K,V,S>::get
-  %_16 = invoke align 8 ptr @"_ZN3std11collections4hash3map24HashMap$LT$K$C$V$C$S$GT$3get17hf4aca90c14f47246E"(ptr align 8 %_17, ptr align 8 %key)
-          to label %bb8 unwind label %cleanup4
-
-bb8:                                              ; preds = %bb7
-; invoke core::option::Option<&T>::cloned
-  invoke void @"_ZN4core6option19Option$LT$$RF$T$GT$6cloned17h57f474a5e6c3a4fdE"(ptr sret(%"core::option::Option<alloc::string::String>") align 8 %cached_answer, ptr align 8 %_16)
-          to label %bb9 unwind label %cleanup4
-
-bb9:                                              ; preds = %bb8
-  store i8 1, ptr %_57, align 1
-; invoke core::ptr::drop_in_place<std::sync::mutex::MutexGuard<std::collections::hash::map::HashMap<alloc::string::String,alloc::string::String>>>
-  invoke void @"_ZN4core3ptr146drop_in_place$LT$std..sync..mutex..MutexGuard$LT$std..collections..hash..map..HashMap$LT$alloc..string..String$C$alloc..string..String$GT$$GT$$GT$17h75c4368b78667542E"(ptr align 8 %map)
-          to label %bb10 unwind label %cleanup3
-
-bb16:                                             ; preds = %bb10
-; invoke <alloc::string::String as core::ops::deref::Deref>::deref
-  %63 = invoke { ptr, i64 } @"_ZN65_$LT$alloc..string..String$u20$as$u20$core..ops..deref..Deref$GT$5deref17hd502b58a8ebee225E"(ptr align 8 %_1)
-          to label %bb17 unwind label %cleanup6
-
-
-bb17:                                             ; preds = %bb16
-  %_33.0 = extractvalue { ptr, i64 } %63, 0
-  %_33.1 = extractvalue { ptr, i64 } %63, 1
-; invoke main::call_chatgpt_api
-  invoke void @_ZN4main16call_chatgpt_api17hc879cdea2c183e1dE(ptr sret(%"alloc::string::String") align 8 %answer1, ptr align 1 %_33.0, i64 %_33.1)
-          to label %bb18 unwind label %cleanup6
-
-
-
-
-
-
-
-
-### To model: LLM API call through curl with token
-cannot find context point for such pattern, see demo-api.ll
-
-skip/create a link for functions like `json_escape` in `examples/demo-api/src/main.rs`.
-
-
 
