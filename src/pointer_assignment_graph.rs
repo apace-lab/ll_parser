@@ -12,6 +12,8 @@ use core::panic;
 use llvm_ir::function::Parameter;
 use llvm_ir::function::ParameterAttribute;
 use llvm_ir::instruction::{InlineAssembly, Instruction};
+use llvm_ir::DebugLoc;
+use llvm_ir::HasDebugLoc;
 use llvm_ir::{Constant, ConstantRef, Function, Module, Name, Operand, Type, TypeRef};
 use log::debug;
 use rustc_demangle::demangle;
@@ -32,6 +34,46 @@ const BYTE_OFFSET_MARKER: u64 = u64::MAX - 1;
 const BYTE_OFFSET_SUMMARY: u64 = u64::MAX - 2;
 
 pub type PANodeId = usize;
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct PASourceLocation {
+    pub file: Option<String>,
+    pub directory: Option<String>,
+    pub line: Option<u32>,
+    pub column: Option<u32>,
+}
+
+impl PASourceLocation {
+    pub fn unknown() -> Self {
+        Self {
+            file: None,
+            directory: None,
+            line: None,
+            column: None,
+        }
+    }
+
+    pub fn display(&self) -> String {
+        match (&self.directory, &self.file, self.line, self.column) {
+            (Some(dir), Some(file), Some(line), Some(col)) => {
+                format!("{}/{}:{}:{}", dir, file, line, col)
+            }
+            (_, Some(file), Some(line), Some(col)) => {
+                format!("{}:{}:{}", file, line, col)
+            }
+            (_, Some(file), Some(line), None) => {
+                format!("{}:{}", file, line)
+            }
+            _ => "<unknown source location>".to_string(),
+        }
+    }
+}
+
+impl std::fmt::Display for PASourceLocation {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        return write!(f, "{}", self.display());
+    }
+}
 
 pub enum PAValueRef<'m> {
     Operand(&'m llvm_ir::Operand),
@@ -134,6 +176,7 @@ pub struct PANode<'m> {
     pub context: PAContext,
 
     pub points_to: BTreeSet<PANodeId>,
+    pub source_loc: Option<PASourceLocation>,
 }
 
 impl<'m> PANode<'m> {
@@ -142,6 +185,7 @@ impl<'m> PANode<'m> {
         kind: PANodeKind<'m>,
         ty: Option<llvm_ir::TypeRef>,
         context: PAContext,
+        source_loc: Option<PASourceLocation>,
     ) -> Self {
         Self {
             id,
@@ -149,6 +193,7 @@ impl<'m> PANode<'m> {
             ty,
             context,
             points_to: BTreeSet::new(),
+            source_loc,
         }
     }
 
@@ -347,6 +392,9 @@ pub struct PACallSite<'m> {
 
     /// caller's context
     pub context: PAContext,
+
+    /// Source location of the call site, if available.
+    pub source_loc: Option<PASourceLocation>,
 }
 
 /// For other edge types, change is from Src(delta).
@@ -701,6 +749,7 @@ impl<'m> PointerAssignmentGraph<'m> {
         callsite_kind: &PACallSiteKind<'m>,
         callsite_id: usize,
         caller_context: PAContext,
+        source_loc: Option<PASourceLocation>,
     ) -> bool {
         // model:
         // declare void @llvm.memcpy.p0.p0.i64(ptr nocapture writeonly %dst,  // The starting address of the destination memory block.
@@ -725,6 +774,7 @@ impl<'m> PointerAssignmentGraph<'m> {
                     caller_name.to_string(),
                     block_name.to_string(),
                     caller_context.clone(),
+                    source_loc.clone(),
                 );
 
                 // println!("[PAG] handling memcpy from caller = {}", caller_name);
@@ -764,6 +814,7 @@ impl<'m> PointerAssignmentGraph<'m> {
                     caller_name.to_string(),
                     block_name.to_string(),
                     caller_context.clone(),
+                    source_loc.clone(),
                 );
 
                 debug!(
@@ -798,6 +849,7 @@ impl<'m> PointerAssignmentGraph<'m> {
                     caller_name.to_string(),
                     block_name.to_string(),
                     caller_context.clone(),
+                    source_loc.clone(),
                 );
 
                 // String::deref returns { ptr, i64 }; expose the data pointer as field 0
@@ -811,6 +863,7 @@ impl<'m> PointerAssignmentGraph<'m> {
                             caller_name,
                         ),
                         caller_context.clone(),
+                        source_loc.clone(),
                     );
                     let slot = PANodeKind::AggregateField {
                         origin: dst,
@@ -824,6 +877,7 @@ impl<'m> PointerAssignmentGraph<'m> {
                         caller_name.to_string(),
                         block_name.to_string(),
                         caller_context.clone(),
+                        source_loc.clone(),
                     );
 
                     self.add_pag_edge(
@@ -839,6 +893,7 @@ impl<'m> PointerAssignmentGraph<'m> {
                         caller_name.to_string(),
                         block_name.to_string(),
                         caller_context.clone(),
+                        source_loc,
                     );
                 }
             }
@@ -902,6 +957,7 @@ impl<'m> PointerAssignmentGraph<'m> {
                 block_name.to_string(),
                 caller_context.clone(),
                 caller_context.clone(),
+                source_loc.clone(),
             );
         }
 
@@ -920,6 +976,7 @@ impl<'m> PointerAssignmentGraph<'m> {
                     function_name.to_string(),
                     block_name.to_string(),
                     caller_context,
+                    source_loc,
                 );
 
                 return true;
@@ -927,6 +984,30 @@ impl<'m> PointerAssignmentGraph<'m> {
         }
 
         false
+    }
+
+    fn get_source_location_from_instruction(&self, inst: &Instruction) -> Option<PASourceLocation> {
+        // Implement the logic to extract source location from debug information in the instruction
+        // Return Some(PASourceLocation) if available, otherwise None
+        let dbg = instruction_debugloc(inst)?;
+
+        Some(PASourceLocation {
+            file: Some(dbg.filename.clone()),
+            directory: dbg.directory.clone(),
+            line: Some(dbg.line),
+            column: dbg.col,
+        })
+    }
+
+    fn get_source_location_from_debug(&self, dbg: Option<&DebugLoc>) -> Option<PASourceLocation> {
+        let dbg = dbg?;
+
+        Some(PASourceLocation {
+            file: Some(dbg.filename.clone()),
+            directory: dbg.directory.clone(),
+            line: Some(dbg.line),
+            column: dbg.col,
+        })
     }
 
     /// visit ir instructions and create constraints
@@ -950,6 +1031,7 @@ impl<'m> PointerAssignmentGraph<'m> {
             }
 
             for instr in &block.instrs {
+                let source_loc = self.get_source_location_from_instruction(instr);
                 match instr {
                     Instruction::Alloca(alloca) => {
                         let src = PANodeKind::AllocaObject {
@@ -973,6 +1055,7 @@ impl<'m> PointerAssignmentGraph<'m> {
                             function_name.clone(),
                             block_name.clone(),
                             context.clone(),
+                            source_loc.clone(),
                         );
                     }
 
@@ -996,6 +1079,7 @@ impl<'m> PointerAssignmentGraph<'m> {
                             function_name.clone(),
                             block_name.clone(),
                             context.clone(),
+                            source_loc.clone(),
                         );
                     }
 
@@ -1006,6 +1090,7 @@ impl<'m> PointerAssignmentGraph<'m> {
                             &function_name,
                             &block_name,
                             context.clone(),
+                            source_loc.clone(),
                         );
 
                         self.add_pag_edge(
@@ -1021,6 +1106,7 @@ impl<'m> PointerAssignmentGraph<'m> {
                             function_name.clone(),
                             block_name.clone(),
                             context.clone(),
+                            source_loc.clone(),
                         );
                     }
 
@@ -1034,6 +1120,7 @@ impl<'m> PointerAssignmentGraph<'m> {
                             &function_name,
                             &block_name,
                             context.clone(),
+                            source_loc.clone(),
                         );
 
                         match gep.source_element_type.as_ref() {
@@ -1071,6 +1158,7 @@ impl<'m> PointerAssignmentGraph<'m> {
                                     function_name.to_string(),
                                     block_name.to_string(),
                                     context.clone(),
+                                    source_loc.clone(),
                                 );
                             }
 
@@ -1096,6 +1184,7 @@ impl<'m> PointerAssignmentGraph<'m> {
                                     function_name.clone(),
                                     block_name.clone(),
                                     context.clone(),
+                                    source_loc.clone(),
                                 );
                             }
 
@@ -1115,6 +1204,7 @@ impl<'m> PointerAssignmentGraph<'m> {
                             &function_name,
                             &block_name,
                             context.clone(),
+                            source_loc.clone(),
                         );
 
                         self.add_pag_edge(
@@ -1133,6 +1223,7 @@ impl<'m> PointerAssignmentGraph<'m> {
                             function_name.clone(),
                             block_name.clone(),
                             context.clone(),
+                            source_loc.clone(),
                         );
                     }
 
@@ -1156,6 +1247,7 @@ impl<'m> PointerAssignmentGraph<'m> {
                             function_name.clone(),
                             block_name.clone(),
                             context.clone(),
+                            source_loc.clone(),
                         );
                     }
 
@@ -1202,6 +1294,7 @@ impl<'m> PointerAssignmentGraph<'m> {
                                 function_name.clone(),
                                 block_name.clone() + " (" + &kind + ")",
                                 context.clone(),
+                                source_loc.clone(),
                             );
                         }
                     }
@@ -1225,6 +1318,7 @@ impl<'m> PointerAssignmentGraph<'m> {
                             function_name.clone(),
                             block_name.clone() + " (true branch)",
                             context.clone(),
+                            source_loc.clone(),
                         );
 
                         self.add_pag_edge(
@@ -1237,6 +1331,7 @@ impl<'m> PointerAssignmentGraph<'m> {
                             function_name.clone(),
                             block_name.clone() + " (false branch)",
                             context.clone(),
+                            source_loc.clone(),
                         );
                     }
 
@@ -1252,6 +1347,7 @@ impl<'m> PointerAssignmentGraph<'m> {
                                 &function_name.clone(),
                             ),
                             context.clone(),
+                            source_loc.clone(),
                         );
                         let slot = PANodeKind::AggregateField { origin: dst, field };
 
@@ -1272,6 +1368,7 @@ impl<'m> PointerAssignmentGraph<'m> {
                             function_name.clone(),
                             block_name.clone(),
                             context.clone(),
+                            source_loc.clone(),
                         );
 
                         // pts(slot) = pts(%val)
@@ -1285,6 +1382,7 @@ impl<'m> PointerAssignmentGraph<'m> {
                             function_name.clone(),
                             block_name.clone(),
                             context.clone(),
+                            source_loc.clone(),
                         );
 
                         // %new points to the slot
@@ -1301,6 +1399,7 @@ impl<'m> PointerAssignmentGraph<'m> {
                             function_name.clone(),
                             block_name.clone(),
                             context.clone(),
+                            source_loc.clone(),
                         );
                     }
 
@@ -1323,6 +1422,7 @@ impl<'m> PointerAssignmentGraph<'m> {
                             function_name.clone(),
                             block_name.clone(),
                             context.clone(),
+                            source_loc.clone(),
                         );
                     }
 
@@ -1343,6 +1443,7 @@ impl<'m> PointerAssignmentGraph<'m> {
                             function_name.clone(),
                             block_name.clone(),
                             context.clone(),
+                            source_loc,
                         );
                     }
 
@@ -1352,6 +1453,7 @@ impl<'m> PointerAssignmentGraph<'m> {
                             &block_name,
                             PACallSiteKind::Call(call),
                             context.clone(),
+                            source_loc,
                         );
                     }
 
@@ -1368,16 +1470,23 @@ impl<'m> PointerAssignmentGraph<'m> {
 
             match &block.term {
                 llvm_ir::terminator::Terminator::Invoke(invoke) => {
+                    let debug_info = invoke.get_debug_loc();
+                    let source_loc = self.get_source_location_from_debug(debug_info.as_ref());
                     let function_name = func.name.clone();
+
                     self.add_edges_for_call(
                         &function_name.clone(),
                         &block_name,
                         PACallSiteKind::Invoke(invoke),
                         context.clone(),
+                        source_loc,
                     );
                 }
 
                 llvm_ir::Terminator::Ret(ret) => {
+                    let debug_info = ret.get_debug_loc();
+                    let source_loc = self.get_source_location_from_debug(debug_info.as_ref());
+
                     if let Some(ret_val) = &ret.return_operand {
                         let src = self.get_nodekind_for_value_ref(
                             PAValueRef::Operand(ret_val),
@@ -1395,6 +1504,7 @@ impl<'m> PointerAssignmentGraph<'m> {
                             block_name.clone(),
                             context.clone(),
                             context.clone(), // TODO: using caller's context for now
+                            source_loc,
                         );
                     }
                 }
@@ -1423,6 +1533,7 @@ impl<'m> PointerAssignmentGraph<'m> {
         function_name: &str,
         block_name: &str,
         context: PAContext,
+        source_loc: Option<PASourceLocation>,
     ) {
         let Some(global_name) = global_name_from_operand(op) else {
             return;
@@ -1457,6 +1568,7 @@ impl<'m> PointerAssignmentGraph<'m> {
                 function_name.to_string(),
                 block_name.to_string(),
                 context.clone(),
+                source_loc.clone(),
             );
 
             debug!("[PAG] add_global_address_if_needed: create global pag edge: src={} -[AddressOf]-> dst={} ", src_id, dst_id);
@@ -1472,6 +1584,7 @@ impl<'m> PointerAssignmentGraph<'m> {
             function_name.to_string(),
             block_name.to_string(),
             context.clone(),
+            source_loc,
         );
 
         debug!("[PAG] add_global_address_if_needed: create global pag edge: src={} -[AddressOf]-> dst={} ", src_id, dst_id);
@@ -1541,7 +1654,12 @@ impl<'m> PointerAssignmentGraph<'m> {
     }
 
     /// create a pag node (with context) if not exist in self.nodes; otherwise, return the node
-    pub fn get_or_create_node(&mut self, nodekind: PANodeKind<'m>, context: PAContext) -> PANodeId {
+    pub fn get_or_create_node(
+        &mut self,
+        nodekind: PANodeKind<'m>,
+        context: PAContext,
+        source_loc: Option<PASourceLocation>,
+    ) -> PANodeId {
         let context = self.get_context_for_node_kind(&nodekind, &context);
         let ty = self.infer_node_type(&nodekind);
         let id = self.nodes.len();
@@ -1553,6 +1671,7 @@ impl<'m> PointerAssignmentGraph<'m> {
             context,
             ty,
             points_to: BTreeSet::new(),
+            source_loc,
         };
 
         let key = node.key();
@@ -1682,6 +1801,7 @@ impl<'m> PointerAssignmentGraph<'m> {
                 field_type,
             },
             base_context,
+            base_node.source_loc.clone(), // should be ?
         )
     }
 
@@ -1716,6 +1836,7 @@ impl<'m> PointerAssignmentGraph<'m> {
                 field_type: None,
             },
             base_context,
+            base_node.source_loc.clone(), // should be ?
         );
 
         /*
@@ -1917,9 +2038,10 @@ impl<'m> PointerAssignmentGraph<'m> {
         function: String,
         block: String,
         context: PAContext,
+        source_loc: Option<PASourceLocation>,
     ) -> (PANodeId, PANodeId) {
-        let src = self.get_or_create_node(src_kind, context.clone());
-        let dst = self.get_or_create_node(dst_kind, context);
+        let src = self.get_or_create_node(src_kind, context.clone(), source_loc.clone());
+        let dst = self.get_or_create_node(dst_kind, context, source_loc);
 
         self.create_and_indert_pag_edge(kind, src, dst, function, block);
 
@@ -1938,9 +2060,10 @@ impl<'m> PointerAssignmentGraph<'m> {
         block: String,
         src_context: PAContext, // caller context
         dst_context: PAContext, // callee context
+        source_loc: Option<PASourceLocation>,
     ) -> (PANodeId, PANodeId) {
-        let src = self.get_or_create_node(src_kind, src_context);
-        let dst = self.get_or_create_node(dst_kind, dst_context);
+        let src = self.get_or_create_node(src_kind, src_context, source_loc.clone());
+        let dst = self.get_or_create_node(dst_kind, dst_context, source_loc);
 
         self.create_and_indert_pag_edge(kind, src, dst, function, block);
 
@@ -2056,6 +2179,7 @@ impl<'m> PointerAssignmentGraph<'m> {
         caller_name: &str,
         block_name: &str,
         caller_context: &PAContext,
+        source_loc: Option<PASourceLocation>,
     ) -> bool {
         if !is_llm_api_function(callee_name) {
             return false;
@@ -2082,6 +2206,7 @@ impl<'m> PointerAssignmentGraph<'m> {
                     caller_name.to_string(),
                     block_name.to_string(),
                     caller_context.clone(),
+                    source_loc.clone(),
                 );
 
                 return true;
@@ -2110,6 +2235,7 @@ impl<'m> PointerAssignmentGraph<'m> {
                     caller_name.to_string(),
                     block_name.to_string(),
                     caller_context.clone(),
+                    source_loc.clone(),
                 );
 
                 return true;
@@ -2130,6 +2256,7 @@ impl<'m> PointerAssignmentGraph<'m> {
         block_name: &str,
         callsite_kind: PACallSiteKind<'m>,
         caller_context: PAContext,
+        source_loc: Option<PASourceLocation>,
     ) {
         let function_operand = self.callsite_function_operand(&callsite_kind);
         let Some(direct_callee) = function_operand else {
@@ -2148,6 +2275,7 @@ impl<'m> PointerAssignmentGraph<'m> {
             callsite_kind.clone(),
             callee_name.clone(),
             caller_context.clone(),
+            source_loc.clone(),
         );
 
         // ------------------------------------------------------------
@@ -2163,6 +2291,7 @@ impl<'m> PointerAssignmentGraph<'m> {
                 &callsite_kind,
                 callsite_id,
                 caller_context.clone(), // <- here
+                source_loc.clone(),
             ) {
                 return;
             }
@@ -2182,6 +2311,7 @@ impl<'m> PointerAssignmentGraph<'m> {
                 callsite_id,
                 callee_name.clone(),
                 callee_func,
+                source_loc.clone(),
             ) {
                 return;
             }
@@ -2208,6 +2338,7 @@ impl<'m> PointerAssignmentGraph<'m> {
                     callsite,
                     callee_func,
                     callee_context.clone(),
+                    source_loc.clone(),
                 );
             } else {
                 debug!(
@@ -2221,6 +2352,7 @@ impl<'m> PointerAssignmentGraph<'m> {
                     caller_name,
                     block_name,
                     &caller_context,
+                    source_loc.clone(),
                 );
             }
 
@@ -2250,6 +2382,7 @@ impl<'m> PointerAssignmentGraph<'m> {
             block_name.to_string(),
             caller_context.clone(),
             caller_context.clone(),
+            source_loc.clone(),
         );
 
         // ------------------------------------------------------------
@@ -2274,6 +2407,7 @@ impl<'m> PointerAssignmentGraph<'m> {
                 caller_name.to_string(),
                 block_name.to_string(),
                 caller_context.clone(),
+                source_loc.clone(),
             );
         } else {
             debug!(
@@ -2302,6 +2436,7 @@ impl<'m> PointerAssignmentGraph<'m> {
                         callsite.clone(),
                         callee_func,
                         caller_context.clone(),
+                        source_loc.clone(),
                     );
                 }
             }
@@ -2482,6 +2617,7 @@ impl<'m> PointerAssignmentGraph<'m> {
         callsite: PACallSite<'m>,
         callee: &'m llvm_ir::Function,
         callee_context: PAContext,
+        source_loc: Option<PASourceLocation>,
     ) {
         let callee_name = callee.name.as_str();
         let arguments = self.get_callsite_arguments(&callsite.kind);
@@ -2506,6 +2642,7 @@ impl<'m> PointerAssignmentGraph<'m> {
                     block_name.to_string(),
                     caller_context.clone(),
                     callee_context.clone(),
+                    source_loc.clone(),
                 );
 
                 debug!(
@@ -2569,6 +2706,7 @@ impl<'m> PointerAssignmentGraph<'m> {
                 // Both nodes belong to the callee context.
                 callee_context.clone(),
                 callee_context.clone(),
+                source_loc.clone(),
             );
         }
 
@@ -2597,6 +2735,7 @@ impl<'m> PointerAssignmentGraph<'m> {
                 block_name.to_string(),
                 callee_context.clone(),
                 caller_context.clone(),
+                source_loc.clone(),
             );
 
             // The result of this callsite is the caller-side lhs.
@@ -2628,6 +2767,7 @@ impl<'m> PointerAssignmentGraph<'m> {
                 block_name.to_string(),
                 callee_context.clone(),
                 caller_context.clone(),
+                source_loc.clone(),
             );
 
             Some(actual_sret_id)
@@ -2751,6 +2891,7 @@ impl<'m> PointerAssignmentGraph<'m> {
         callsite_id: usize,
         callee_name: String,
         callee_func: Option<&Function>,
+        source_loc: Option<PASourceLocation>,
     ) -> bool {
         if !matches!(
             self.config.context_mode,
@@ -2807,6 +2948,7 @@ impl<'m> PointerAssignmentGraph<'m> {
             caller_name.to_string(),
             block_name.to_string(),
             callsite.context.clone(),
+            source_loc,
         );
 
         true
@@ -3668,6 +3810,7 @@ impl<'m> PointerAssignmentGraph<'m> {
                 callsite.clone(),
                 callee_func,
                 callee_context,
+                callsite.source_loc.clone(),
             );
         }
 
@@ -3729,6 +3872,7 @@ impl<'m> PointerAssignmentGraph<'m> {
                     callsite.clone(),
                     callee_func,
                     callee_context,
+                    callsite.source_loc.clone(),
                 );
             }
         }
@@ -3788,6 +3932,7 @@ impl<'m> PointerAssignmentGraph<'m> {
                 callsite.clone(),
                 callee_func,
                 callee_context,
+                callsite.source_loc.clone(),
             );
         }
 
@@ -3891,6 +4036,7 @@ impl<'m> PointerAssignmentGraph<'m> {
         call: PACallSiteKind<'m>,
         direct_callee: Option<String>,
         caller_context: PAContext,
+        source_loc: Option<PASourceLocation>,
     ) -> (usize, PACallSite<'m>) {
         let id = self.next_callsite_id;
         self.next_callsite_id += 1;
@@ -3902,6 +4048,7 @@ impl<'m> PointerAssignmentGraph<'m> {
             kind: call,
             direct_callee,
             context: caller_context,
+            source_loc,
         };
 
         self.callsites.insert(id, callsite.clone());
@@ -4019,6 +4166,27 @@ impl<'m> PointerAssignmentGraph<'m> {
         Ok(())
     }
 
+    pub fn print_source_locations(&self) -> Result<(), Box<dyn Error>> {
+        let mut file = File::create("source_locations.txt")?;
+
+        writeln!(file, "=== Source Locations from Debug Info ===")?;
+        writeln!(file)?;
+
+        // sort and print
+        let mut nodes: Vec<_> = self.nodes.iter().collect();
+        nodes.sort_by_key(|(id, _node)| **id);
+
+        for (id, node) in nodes {
+            if let Some(source_loc) = &node.source_loc {
+                write!(file, "  {}  ->  {}\n", node, source_loc)?;
+            } else {
+                write!(file, "  {}  ->  <N/A>\n", node)?;
+            }
+        }
+
+        Ok(())
+    }
+
     /// print the PAG to a file
     pub fn print_pointer_assignment_graph(&self) -> Result<(), Box<dyn Error>> {
         if self.config.on_the_fly {
@@ -4058,6 +4226,7 @@ impl<'m> PointerAssignmentGraph<'m> {
         }
 
         self.print_points_to_sets()?;
+        self.print_source_locations()?;
 
         writeln!(file, "=== functions_by_name ===")?;
         writeln!(file, "total functions: {}", self.functions_by_name.len())?;
@@ -5087,4 +5256,66 @@ fn first_pointer_like_sret_parameter(function: &llvm_ir::Function) -> Option<(us
                 None
             }
         })
+}
+
+fn instruction_debugloc(inst: &Instruction) -> Option<&DebugLoc> {
+    match inst {
+        Instruction::Add(i) => i.debugloc.as_ref(),
+        Instruction::Sub(i) => i.debugloc.as_ref(),
+        Instruction::Mul(i) => i.debugloc.as_ref(),
+        Instruction::UDiv(i) => i.debugloc.as_ref(),
+        Instruction::SDiv(i) => i.debugloc.as_ref(),
+        Instruction::URem(i) => i.debugloc.as_ref(),
+        Instruction::SRem(i) => i.debugloc.as_ref(),
+
+        Instruction::And(i) => i.debugloc.as_ref(),
+        Instruction::Or(i) => i.debugloc.as_ref(),
+        Instruction::Xor(i) => i.debugloc.as_ref(),
+        Instruction::Shl(i) => i.debugloc.as_ref(),
+        Instruction::LShr(i) => i.debugloc.as_ref(),
+        Instruction::AShr(i) => i.debugloc.as_ref(),
+
+        Instruction::Alloca(i) => i.debugloc.as_ref(),
+        Instruction::Load(i) => i.debugloc.as_ref(),
+        Instruction::Store(i) => i.debugloc.as_ref(),
+        Instruction::GetElementPtr(i) => i.debugloc.as_ref(),
+
+        Instruction::Trunc(i) => i.debugloc.as_ref(),
+        Instruction::ZExt(i) => i.debugloc.as_ref(),
+        Instruction::SExt(i) => i.debugloc.as_ref(),
+        Instruction::FPTrunc(i) => i.debugloc.as_ref(),
+        Instruction::FPExt(i) => i.debugloc.as_ref(),
+        Instruction::FPToUI(i) => i.debugloc.as_ref(),
+        Instruction::FPToSI(i) => i.debugloc.as_ref(),
+        Instruction::UIToFP(i) => i.debugloc.as_ref(),
+        Instruction::SIToFP(i) => i.debugloc.as_ref(),
+        Instruction::PtrToInt(i) => i.debugloc.as_ref(),
+        Instruction::IntToPtr(i) => i.debugloc.as_ref(),
+        Instruction::BitCast(i) => i.debugloc.as_ref(),
+        Instruction::AddrSpaceCast(i) => i.debugloc.as_ref(),
+
+        Instruction::ICmp(i) => i.debugloc.as_ref(),
+        Instruction::FCmp(i) => i.debugloc.as_ref(),
+
+        Instruction::Phi(i) => i.debugloc.as_ref(),
+        Instruction::Select(i) => i.debugloc.as_ref(),
+        Instruction::Call(i) => i.debugloc.as_ref(),
+
+        Instruction::ExtractElement(i) => i.debugloc.as_ref(),
+        Instruction::InsertElement(i) => i.debugloc.as_ref(),
+        Instruction::ShuffleVector(i) => i.debugloc.as_ref(),
+        Instruction::ExtractValue(i) => i.debugloc.as_ref(),
+        Instruction::InsertValue(i) => i.debugloc.as_ref(),
+
+        Instruction::LandingPad(i) => i.debugloc.as_ref(),
+        Instruction::Freeze(i) => i.debugloc.as_ref(),
+
+        Instruction::Fence(i) => i.debugloc.as_ref(),
+        Instruction::CmpXchg(i) => i.debugloc.as_ref(),
+        Instruction::AtomicRMW(i) => i.debugloc.as_ref(),
+
+        Instruction::VAArg(i) => i.debugloc.as_ref(),
+
+        _ => None,
+    }
 }

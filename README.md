@@ -276,3 +276,8 @@ then run `cargo update -p indexmap --precise 2.7.1` to downgrade the crate
 RUSTFLAGS=-Awarnings cargo run -q -- tests/llm_api_ac.ll --pag=afg --api=signatures/llm_api_functions.json --ac=signatures/ac_functions.json &> console.txt
 ```
 
+```bash
+cargo rustc -- \
+    -C debuginfo=2 \
+    --emit=llvm-ir
+```
