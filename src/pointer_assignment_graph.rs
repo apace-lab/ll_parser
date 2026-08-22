@@ -5,6 +5,7 @@ use crate::context::{
     PAConfig, PAContext, PAContextElem, PAContextMode, PAContextSelectPolicy, PAObjectContextKind,
 };
 use crate::signature::Signature;
+use crate::util;
 use crate::AFGContextEngine;
 use crate::ControlFlowGraph;
 use crate::FunctionsByType;
@@ -494,6 +495,7 @@ pub struct PointerAssignmentGraph<'m> {
 
     /// for AFG, the engine to record functions
     pub semantic_points: Vec<SemanticPoint>,
+    pub afg_engine: Option<AFGContextEngine<'m>>,
 }
 
 impl<'m> PointerAssignmentGraph<'m> {
@@ -510,10 +512,12 @@ impl<'m> PointerAssignmentGraph<'m> {
         let functions_by_name: BTreeMap<String, &'m llvm_ir::Function> = modules
             .iter()
             .flat_map(|module| {
-                module
-                    .functions
-                    .iter()
-                    .map(|f| (normalize_function_name(f.name.as_str()).to_string(), f))
+                module.functions.iter().map(|f| {
+                    (
+                        util::normalize_function_name(f.name.as_str()).to_string(),
+                        f,
+                    )
+                })
             })
             .collect();
         let cg = CallGraph::empty();
@@ -525,7 +529,7 @@ impl<'m> PointerAssignmentGraph<'m> {
         for module in &modules {
             for gv in &module.global_vars {
                 global_types.insert(
-                    normalize_function_name(&format!("{}", gv.name)).to_string(),
+                    util::normalize_function_name(&format!("{}", gv.name)).to_string(),
                     gv.ty.clone(),
                 );
             }
@@ -555,6 +559,12 @@ impl<'m> PointerAssignmentGraph<'m> {
             _ => panic!("no such config."),
         };
 
+        let mut engine = if config.policy == PAContextSelectPolicy::AFG {
+            Some(AFGContextEngine::new())
+        } else {
+            None
+        };
+
         let mut pag = Self {
             modules: modules.clone(),
             functions_by_name,
@@ -582,6 +592,7 @@ impl<'m> PointerAssignmentGraph<'m> {
             config: config,
             app_crate: String::new(),
             semantic_points: Vec::new(),
+            afg_engine: engine,
         };
 
         if let Some(main_name) = pag.find_main_function_name() {
@@ -636,8 +647,8 @@ impl<'m> PointerAssignmentGraph<'m> {
 
         pag.print_statistics();
 
-        if pag.config.policy == PAContextSelectPolicy::AFG {
-            let mut engine = AFGContextEngine::new(&pag);
+        if let Some(mut engine) = pag.afg_engine.take() {
+            engine.init(&pag);
             engine.run();
             engine.print_result();
         }
@@ -1022,7 +1033,7 @@ impl<'m> PointerAssignmentGraph<'m> {
 
         for block in &func.basic_blocks {
             let block_name = format!("{}", block.name);
-            if skip.contains(&normalize_block_label(&block_name)) {
+            if skip.contains(&util::normalize_block_label(&block_name)) {
                 debug!(
                     "discover_constraints_in_function: skip basicblock={}",
                     block_name
@@ -1539,7 +1550,7 @@ impl<'m> PointerAssignmentGraph<'m> {
             return;
         };
 
-        let clean_name = normalize_function_name(&global_name).to_string();
+        let clean_name = util::normalize_function_name(&global_name).to_string();
 
         let address_node = PANodeKind::GlobalAddress {
             name: clean_name.clone(),
@@ -1624,7 +1635,7 @@ impl<'m> PointerAssignmentGraph<'m> {
         value: PAValueRef<'m>,
         function_name: &str,
     ) -> PANodeKind<'m> {
-        let function = normalize_function_name(function_name).to_string();
+        let function = util::normalize_function_name(function_name).to_string();
 
         match value {
             PAValueRef::Operand(llvm_ir::Operand::LocalOperand { name, ty }) => {
@@ -2140,7 +2151,7 @@ impl<'m> PointerAssignmentGraph<'m> {
 
     /// push newly discovered callee to pending_functions if not exist
     fn enqueue_reachable_function(&mut self, callee_name: &str, callee_context: PAContext) {
-        let callee_name = normalize_function_name(callee_name).to_string();
+        let callee_name = util::normalize_function_name(callee_name).to_string();
         let key = (callee_name.clone(), callee_context.clone());
         if self.visited_functions.contains(&key) {
             return;
@@ -2298,7 +2309,7 @@ impl<'m> PointerAssignmentGraph<'m> {
 
             let callee_func = self
                 .functions_by_name
-                .get(normalize_function_name(callee_name.as_str()))
+                .get(util::normalize_function_name(callee_name.as_str()))
                 .copied();
 
             // normal flow when context mode is kobj or kmix
@@ -2398,7 +2409,7 @@ impl<'m> PointerAssignmentGraph<'m> {
             self.add_pag_edge(
                 self.get_nodekind_for_value_ref(PAValueRef::Operand(receiver_arg), caller_name),
                 PANodeKind::ReceiverObject {
-                    caller: normalize_function_name(caller_name).to_string(),
+                    caller: util::normalize_function_name(caller_name).to_string(),
                     block: block_name.to_string(),
                     callsite_id: callsite_id,
                     self_idx: idx,
@@ -2467,7 +2478,7 @@ impl<'m> PointerAssignmentGraph<'m> {
         callsite_id: usize,
     ) -> PAContextElem {
         PAContextElem::CallSite {
-            caller: normalize_function_name(caller).to_string(),
+            caller: util::normalize_function_name(caller).to_string(),
             block: block.to_string(),
             callsite_id,
         }
@@ -2485,7 +2496,7 @@ impl<'m> PointerAssignmentGraph<'m> {
                 let fname = function.clone();
                 return Some(PAContextElem::Object {
                     kind: PAObjectContextKind::Allocation,
-                    function: normalize_function_name(&fname).to_string(),
+                    function: util::normalize_function_name(&fname).to_string(),
                     block: block.clone(),
                     id: receiver_obj,
                 });
@@ -2497,7 +2508,7 @@ impl<'m> PointerAssignmentGraph<'m> {
                 let fname = function.clone();
                 return Some(PAContextElem::Object {
                     kind: PAObjectContextKind::Allocation,
-                    function: normalize_function_name(&fname).to_string(),
+                    function: util::normalize_function_name(&fname).to_string(),
                     block: block.clone(),
                     id: receiver_obj,
                 });
@@ -2936,7 +2947,7 @@ impl<'m> PointerAssignmentGraph<'m> {
         self.add_pag_edge(
             self.get_nodekind_for_value_ref(PAValueRef::Operand(receiver_arg), &callee_name),
             PANodeKind::ReceiverObject {
-                caller: normalize_function_name(caller_name).to_string(),
+                caller: util::normalize_function_name(caller_name).to_string(),
                 block: callsite.block.clone(),
                 callsite_id: callsite.id,
                 self_idx,
@@ -3898,7 +3909,7 @@ impl<'m> PointerAssignmentGraph<'m> {
             return false;
         };
 
-        let callee_name = normalize_function_name(&callee_name);
+        let callee_name = util::normalize_function_name(&callee_name);
 
         let Some(callee_func) = self.functions_by_name.get(callee_name).cloned() else {
             return false;
@@ -4409,40 +4420,6 @@ impl<'m> PointerAssignmentGraph<'m> {
 
     ////////////////////////// cfg related //////////////////////////
 
-    pub fn get_normal_success_block(&self, function: &str, block: &str) -> Vec<String> {
-        let func = self
-            .functions_by_name
-            .get(normalize_function_name(function))
-            .copied();
-
-        let Some(func) = func else {
-            debug!(
-                "[PAG] get_normal_cfg_successors: cannot find function body with name = {}",
-                function
-            );
-            return Vec::new();
-        };
-
-        let cfg: ControlFlowGraph<'_> = ControlFlowGraph::new(func);
-        let mut successors = Vec::new();
-        let name = normalize_block_label(&format!("{}", block));
-        let block_name = Name::Name(Box::new(name.to_string()));
-
-        for succ in cfg.succs(&block_name) {
-            let succ = normalize_block_label(&format!("{}", succ));
-            if !is_cleanup_block_name(&succ) {
-                successors.push(succ.clone())
-            }
-        }
-
-        debug!(
-            "[PAG] get_normal_cfg_successors: find normal bb successors = {:?} for bb = {}",
-            successors, block
-        );
-
-        successors
-    }
-
     /// compute the cleanup basicblocks and its successors that do not have normal incoming control flow edges
     /// return a set of basicblock names that need to skip
     fn compute_cleanup_blocks_with_cfg(&mut self, func: &llvm_ir::Function) -> BTreeSet<String> {
@@ -4452,8 +4429,8 @@ impl<'m> PointerAssignmentGraph<'m> {
         let mut worklist = VecDeque::new();
 
         for bb in &func.basic_blocks {
-            let name = normalize_block_label(&format!("{}", &bb.name));
-            if is_cleanup_block_name(&name) {
+            let name = util::normalize_block_label(&format!("{}", &bb.name));
+            if util::is_cleanup_block_name(&name) {
                 if skip.insert(name.clone()) {
                     worklist.push_back(name);
                 }
@@ -4463,7 +4440,7 @@ impl<'m> PointerAssignmentGraph<'m> {
         while let Some(block_name) = worklist.pop_front() {
             let name = Name::Name(Box::new(block_name));
             for succ in cfg.succs(&name) {
-                let succ = normalize_block_label(&format!("{}", succ));
+                let succ = util::normalize_block_label(&format!("{}", succ));
 
                 if skip.insert(succ.clone()) {
                     worklist.push_back(succ);
@@ -4493,7 +4470,7 @@ fn direct_callee_name(op: &llvm_ir::Operand) -> Option<String> {
 fn direct_callee_name_from_constant(c: &llvm_ir::Constant) -> Option<String> {
     match c {
         llvm_ir::Constant::GlobalReference { name, .. } => {
-            Some(normalize_function_name(&format!("{}", name)).to_string())
+            Some(util::normalize_function_name(&format!("{}", name)).to_string())
         }
 
         llvm_ir::Constant::BitCast(bitcast) => {
@@ -4548,7 +4525,7 @@ fn type_key(ty: &llvm_ir::TypeRef) -> String {
 fn collect_function_refs_from_constant(c: &ConstantRef, out: &mut Vec<String>) {
     match c.as_ref() {
         Constant::GlobalReference { name, .. } => {
-            out.push(normalize_function_name(&format!("{}", name)).to_string());
+            out.push(util::normalize_function_name(&format!("{}", name)).to_string());
         }
 
         Constant::Struct { values, .. } => {
@@ -4665,22 +4642,11 @@ fn named_struct_name(receiver_ty: &TypeRef) -> Option<String> {
     }
 }
 
-/// direct_callee_name direct output: "%_ZN4main16spawn_user_query17h488fc5de2a3a0326E"
-/// or @"_ZN4main16spawn_user_query28_$u7b$$u7b$closure$u7d$$u7d$17hb7b958eb69c4a9bcE"
-/// but output from functions_by_name:
-/// key = _ZN4main16spawn_user_query17h488fc5de2a3a0326E
-/// func.name = _ZN4main16spawn_user_query17h488fc5de2a3a0326E
-fn normalize_function_name(name: &str) -> &str {
-    name.trim_start_matches('%')
-        .trim_start_matches('@')
-        .trim_matches('"')
-}
-
 /// parse the crate name from a Rust legacy-mangled symbol: `_ZN<len><crate>...`.
 /// e.g. `_ZN11llm_ac_demo4main17h..E` -> `llm_ac_demo`. returns "" if it does not
 /// look like a `_ZN`-mangled symbol (selective-context gate then disables).
 fn parse_app_crate(mangled: &str) -> String {
-    let s = normalize_function_name(mangled).trim_start_matches('_');
+    let s = util::normalize_function_name(mangled).trim_start_matches('_');
     let Some(rest) = s.strip_prefix("ZN") else {
         return String::new();
     };
@@ -4896,7 +4862,7 @@ fn call_return_type(function_ty: &llvm_ir::TypeRef) -> Option<llvm_ir::TypeRef> 
 //   _ZN3std6thread7Builder16spawn_unchecked_17hba2e176eb3c3af33E
 //   _ZN3std10sys_common9backtrace28__rust_begin_short_backtrace17h06bb21b8ede9b485E
 fn should_skip_function_body(function_name: &str) -> bool {
-    let name = normalize_function_name(function_name);
+    let name = util::normalize_function_name(function_name);
 
     if name.contains("hashbrown")
         || name.contains("alloc5alloc")
@@ -4937,7 +4903,7 @@ fn should_skip_function_body(function_name: &str) -> bool {
 /// heuristically skip creating new contexts for these functions,
 /// just use Global
 fn should_skip_function_context(function_name: &str) -> bool {
-    let name = normalize_function_name(function_name);
+    let name = util::normalize_function_name(function_name);
 
     if name.contains("panic")
         || name.contains("panicking")
@@ -4987,7 +4953,7 @@ fn collect_vtable_functions<'m>(
                 continue;
             };
             let name = format!("{}", gv.name);
-            let global_name = normalize_function_name(&name);
+            let global_name = util::normalize_function_name(&name);
 
             if global_name.contains("vtable") // i have only seen this for now
                         || global_name.contains("VTABLE")
@@ -5149,25 +5115,6 @@ fn memcpy_object_types_compatible(src_ty: &llvm_ir::TypeRef, dst_ty: &llvm_ir::T
     // Opaque pointers make exact checking hard.
     // If both may contain pointers, allow conservatively.
     type_may_contain_pointer(src_ty) && type_may_contain_pointer(dst_ty)
-}
-
-pub fn normalize_block_label(name: &str) -> String {
-    name.trim()
-        .trim_start_matches('%')
-        .trim_matches('"')
-        .to_string()
-}
-
-/// check whether the block name is for abnormal executions
-pub fn is_cleanup_block_name(name: &str) -> bool {
-    name == "cleanup"
-        || name.starts_with("cleanup.")
-        || name.starts_with("cleanup")
-        || name == "terminate"
-        || name.starts_with("terminate")
-        || name.starts_with("unreachable")
-        || name == "panic"
-        || name.starts_with("panic")
 }
 
 fn is_global_reference_constant(op: &Operand) -> bool {

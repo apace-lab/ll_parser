@@ -4,8 +4,12 @@ use crate::pointer_assignment_graph::PACallSite;
 use crate::pointer_assignment_graph::PAEdgeKind;
 use crate::pointer_assignment_graph::PANodeId;
 use crate::signature::SecurityPoint;
+use crate::util;
+use crate::ControlFlowGraph;
 use crate::PAEdge;
+use crate::PANode;
 use crate::PointerAssignmentGraph;
+use llvm_ir::Name;
 use log::debug;
 use std::collections::BTreeMap;
 use std::collections::{HashMap, HashSet, VecDeque};
@@ -88,8 +92,11 @@ impl fmt::Display for SemanticPoint {
 }
 
 pub struct AFGContextEngine<'m> {
-    pag: &'m PointerAssignmentGraph<'m>,
     callsites: BTreeMap<usize, PACallSite<'m>>,
+    pub functions_by_name: BTreeMap<String, &'m llvm_ir::Function>,
+    pub semantic_points: Vec<SemanticPoint>,
+    pub nodes: HashMap<PANodeId, PANode<'m>>,
+
     /// caller -> block -> set of callsite_ids
     pub callsites_by_block: HashMap<String, HashMap<String, Vec<usize>>>,
 
@@ -111,23 +118,52 @@ pub struct AFGContextEngine<'m> {
 }
 
 impl<'m> AFGContextEngine<'m> {
-    pub fn new(pag: &'m PointerAssignmentGraph<'m>) -> Self {
-        let outgoing = Self::build_outgoing_edges(&pag.edges);
-        let (callsites_by_block, _callee2callsites) = Self::build_calls(&pag.callsites);
+    // pub fn new(pag: &'m PointerAssignmentGraph<'m>) -> Self {
+    //     let outgoing = Self::build_outgoing_edges(&pag.edges);
+    //     let (callsites_by_block, _callee2callsites) = Self::build_calls(&pag.callsites);
 
+    //     let mut engine = Self {
+    //         pag,
+    //         callsites: pag.callsites.clone(),
+    //         callsites_by_block,
+    //         node_contexts: HashMap::new(),
+    //         active_principals: HashMap::new(),
+    //         outgoing,
+    //         semantic_points_by_input: HashMap::new(),
+    //         semantic_points_by_result: HashMap::new(),
+    //     };
+
+    //     engine.build_semantic_point_index();
+    //     engine
+    // }
+
+    pub fn new() -> Self {
         let mut engine = Self {
-            pag,
-            callsites: pag.callsites.clone(),
-            callsites_by_block,
+            callsites: BTreeMap::new(),
+            nodes: HashMap::new(),
+            functions_by_name: BTreeMap::new(),
+            semantic_points: Vec::new(),
+            callsites_by_block: HashMap::new(),
             node_contexts: HashMap::new(),
             active_principals: HashMap::new(),
-            outgoing,
+            outgoing: HashMap::new(),
             semantic_points_by_input: HashMap::new(),
             semantic_points_by_result: HashMap::new(),
         };
 
-        engine.build_semantic_point_index();
         engine
+    }
+
+    pub fn init(&mut self, pag: &'m PointerAssignmentGraph<'m>) {
+        self.outgoing = Self::build_outgoing_edges(&pag.edges);
+        let (callsites_by_block, _callee2callsites) = Self::build_calls(&pag.callsites);
+        self.callsites_by_block = callsites_by_block;
+        self.callsites = pag.callsites.clone();
+        self.functions_by_name = pag.functions_by_name.clone();
+        self.semantic_points = pag.semantic_points.clone();
+        self.nodes = pag.nodes.clone();
+
+        self.build_semantic_point_index();
     }
 
     pub fn run(&mut self) {
@@ -150,7 +186,7 @@ impl<'m> AFGContextEngine<'m> {
     ///////// preparing afg engine from pag /////////////
 
     fn build_semantic_point_index(&mut self) {
-        for (point_index, point) in self.pag.semantic_points.iter().enumerate() {
+        for (point_index, point) in self.semantic_points.iter().enumerate() {
             for arg in &point.argument_nodes {
                 self.semantic_points_by_input
                     .entry(*arg)
@@ -373,7 +409,7 @@ impl<'m> AFGContextEngine<'m> {
 
             // TODO: if two successsors, one is for true branch, and the other for false branch
             // we should only do the true branch,
-            for successor in self.pag.get_normal_success_block(function, &block) {
+            for successor in self.get_normal_success_blocks(function, &block) {
                 if !visited.contains(&successor) {
                     worklist.push_back(successor);
                 }
@@ -384,8 +420,43 @@ impl<'m> AFGContextEngine<'m> {
     }
 
     /// return all successor bbs of block in function following normal execution
+    pub fn get_normal_success_blocks(&self, function: &str, block: &str) -> Vec<String> {
+        let func = self
+            .functions_by_name
+            .get(util::normalize_function_name(function))
+            .copied();
+
+        let Some(func) = func else {
+            debug!(
+                "[PAG] get_normal_cfg_successors: cannot find function body with name = {}",
+                function
+            );
+            return Vec::new();
+        };
+
+        let cfg: ControlFlowGraph<'_> = ControlFlowGraph::new(&func);
+        let mut successors = Vec::new();
+        let name = util::normalize_block_label(&format!("{}", block));
+        let block_name = Name::Name(Box::new(name.to_string()));
+
+        for succ in cfg.succs(&block_name) {
+            let succ = util::normalize_block_label(&format!("{}", succ));
+            if !util::is_cleanup_block_name(&succ) {
+                successors.push(succ.clone())
+            }
+        }
+
+        debug!(
+            "[PAG] get_normal_cfg_successors: find normal bb successors = {:?} for bb = {}",
+            successors, block
+        );
+
+        successors
+    }
+
+    /// return one true path successor bb of block in function following normal execution
     fn get_normal_success_block(&self, function: &str, block: &str) -> Option<String> {
-        let bbs = self.pag.get_normal_success_block(function, block);
+        let bbs = self.get_normal_success_blocks(function, block);
         debug!("[AFG] get_normal_success_block: find {} success blocks ({:?}) for function = {}, bb = {}", bbs.len(), bbs, function, block);
 
         if bbs.is_empty() {
@@ -415,7 +486,7 @@ impl<'m> AFGContextEngine<'m> {
         let mut seeds = Vec::new();
         let mut return_visited: HashSet<ReturnPropagationKey> = HashSet::new();
 
-        for point in &self.pag.semantic_points {
+        for point in &self.semantic_points {
             if !matches!(point.kind, SemanticPointKind::AccessControl { .. }) {
                 continue;
             }
@@ -785,7 +856,7 @@ impl<'m> AFGContextEngine<'m> {
          */
         let mut seeds: Vec<(PANodeId, PAContextElem)> = Vec::new();
 
-        for point in &self.pag.semantic_points {
+        for point in &self.semantic_points {
             let principals = self.active_principals_at_point(point);
 
             if principals.is_empty() {
@@ -942,7 +1013,7 @@ impl<'m> AFGContextEngine<'m> {
             /*
              * Clone to avoid immutable/mutable borrow conflict.
              */
-            let point = self.pag.semantic_points[index].clone();
+            let point = self.semantic_points[index].clone();
 
             match &point.kind {
                 SemanticPointKind::LlmPrompt { .. } => {
@@ -961,6 +1032,18 @@ impl<'m> AFGContextEngine<'m> {
     // =========================================================================
     // Debugging / printing
     // =========================================================================
+
+    pub fn get_node_by_id(&self, id: PANodeId) -> Option<PANode> {
+        let node = self.nodes.get(&id);
+        let Some(node) = node else {
+            debug!("[PAG] get_node_by_id: cannot find node with id = {}", id);
+            return None;
+        };
+
+        debug!("[PAG] get_node_by_id: find id = {} -> node = {}", id, node);
+
+        Some(node.clone())
+    }
 
     pub fn print_result(&self) {
         println!("\n========== AFG Context Analysis ==========");
@@ -985,7 +1068,7 @@ impl<'m> AFGContextEngine<'m> {
                 continue;
             }
 
-            if let Some(node) = self.pag.get_node_by_id(node_id) {
+            if let Some(node) = self.get_node_by_id(node_id) {
                 println!("n{} = {:?}", node_id, node);
             } else {
                 println!("n{} cannot find node by id", node_id);
@@ -1019,7 +1102,7 @@ impl<'m> AFGContextEngine<'m> {
     fn print_llm_flows(&self) {
         println!("\n========== LLM API FLOWS ==========");
 
-        for point in &self.pag.semantic_points {
+        for point in &self.semantic_points {
             let SemanticPointKind::LlmCall { provider, .. } = &point.kind else {
                 continue;
             };

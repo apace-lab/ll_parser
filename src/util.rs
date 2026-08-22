@@ -137,3 +137,35 @@ pub fn resolve_signature_file(
 
     None
 }
+
+//////////////////////// analysis related ////////////////////////
+
+/// direct_callee_name direct output: "%_ZN4main16spawn_user_query17h488fc5de2a3a0326E"
+/// or @"_ZN4main16spawn_user_query28_$u7b$$u7b$closure$u7d$$u7d$17hb7b958eb69c4a9bcE"
+/// but output from functions_by_name:
+/// key = _ZN4main16spawn_user_query17h488fc5de2a3a0326E
+/// func.name = _ZN4main16spawn_user_query17h488fc5de2a3a0326E
+pub fn normalize_function_name(name: &str) -> &str {
+    name.trim_start_matches('%')
+        .trim_start_matches('@')
+        .trim_matches('"')
+}
+
+pub fn normalize_block_label(name: &str) -> String {
+    name.trim()
+        .trim_start_matches('%')
+        .trim_matches('"')
+        .to_string()
+}
+
+/// check whether the block name is for abnormal executions
+pub fn is_cleanup_block_name(name: &str) -> bool {
+    name == "cleanup"
+        || name.starts_with("cleanup.")
+        || name.starts_with("cleanup")
+        || name == "terminate"
+        || name.starts_with("terminate")
+        || name.starts_with("unreachable")
+        || name == "panic"
+        || name.starts_with("panic")
+}
