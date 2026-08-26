@@ -201,6 +201,18 @@ impl<'m> PANode<'m> {
     pub fn key(&self) -> String {
         return format!("{} (ctx::{:?})", self.kind.key(), self.context);
     }
+
+    /// The enclosing function (mangled name) of this node, if it has one.
+    pub fn function(&self) -> Option<&str> {
+        match &self.kind {
+            PANodeKind::SSAValue { function, .. } => function.as_deref(),
+            PANodeKind::AllocaObject { function, .. } => Some(function),
+            PANodeKind::FunctionReturn { function, .. } => Some(function),
+            PANodeKind::FunctionObject { function, .. } => Some(function),
+            PANodeKind::ReceiverObject { caller, .. } => Some(caller),
+            _ => None,
+        }
+    }
 }
 
 impl<'m> PANodeKind<'m> {
@@ -598,9 +610,13 @@ impl<'m> PointerAssignmentGraph<'m> {
         if let Some(main_name) = pag.find_main_function_name() {
             println!("[PAG] potential main function: {}", main_name);
 
+            // Derive the application crate for all policies (used by selective
+            // context, entry-point seeding, and the AFG engine's execution
+            // propagation), not only under AppOnly.
+            pag.app_crate = parse_app_crate(&main_name);
+
             match pag.config.policy {
                 PAContextSelectPolicy::AppOnly => {
-                    pag.app_crate = parse_app_crate(&main_name);
                     println!("[PAG] selective context app crate: {:?}", pag.app_crate);
                 }
                 _ => {}
@@ -2830,44 +2846,50 @@ impl<'m> PointerAssignmentGraph<'m> {
             // TODO: other categories ??
             if let Some(category) = context_point.category.clone() {
                 let kind = match category.as_str() {
-                    "authentication" | "authorization" => {
-                        SemanticPointKind::AccessControl { category }
-                    }
+                    // access-control decisions
+                    "authentication" | "authorization" | "policy-enforcement"
+                    | "raw-http" => Some(SemanticPointKind::AccessControl { category }),
 
                     // prompt-construction api call
-                    "llm-api-prompt" => SemanticPointKind::LlmPrompt { category },
+                    "llm-api-prompt" => Some(SemanticPointKind::LlmPrompt { category }),
 
-                    // external api call
-                    "llm-api-chat" => SemanticPointKind::LlmCall {
+                    // external llm api call (bare "llm-api" is the pre-migration
+                    // category still used by several catalog entries)
+                    "llm-api" | "llm-api-chat" => Some(SemanticPointKind::LlmCall {
                         category,
                         provider: None,
-                    },
+                    }),
 
+                    // Unknown category: warn and skip rather than crashing the
+                    // analysis, so the evolving catalog can add categories safely.
                     _ => {
-                        panic!(
-                            "[AFG] unhandled context category = {:?} for callsite {:?}",
+                        eprintln!(
+                            "[AFG] warning: skipping unhandled context category = {:?} for callsite {:?}",
                             category, callsite
                         );
+                        None
                     }
                 };
 
-                let semantic_point = SemanticPoint {
-                    callsite_id: callsite.id,
-                    kind: kind,
-                    security_point: context_point,
+                if let Some(kind) = kind {
+                    let semantic_point = SemanticPoint {
+                        callsite_id: callsite.id,
+                        kind,
+                        security_point: context_point,
 
-                    caller: caller_name.to_string(),
-                    block: block_name.to_string(),
-                    callee: Some(callee_name.to_string()),
-                    caller_context: caller_context.clone(),
+                        caller: caller_name.to_string(),
+                        block: block_name.to_string(),
+                        callee: Some(callee_name.to_string()),
+                        caller_context: caller_context.clone(),
 
-                    argument_nodes: related_nodeids,
-                    result_node: result_id,
-                };
+                        argument_nodes: related_nodeids,
+                        result_node: result_id,
+                    };
 
-                println!("[AFG] register semantic point = {}", semantic_point);
+                    println!("[AFG] register semantic point = {}", semantic_point);
 
-                self.semantic_points.push(semantic_point);
+                    self.semantic_points.push(semantic_point);
+                }
             }
         }
     }

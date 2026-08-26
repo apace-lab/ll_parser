@@ -115,6 +115,10 @@ pub struct AFGContextEngine<'m> {
 
     /// Semantic points whose result corresponds to a node.
     semantic_points_by_result: HashMap<PANodeId, Vec<usize>>,
+
+    /// Application crate prefix (e.g. "llm_ac_demo"), derived from the module's
+    /// `main`. Used to decide which callees are application code.
+    pub app_crate: String,
 }
 
 impl<'m> AFGContextEngine<'m> {
@@ -149,12 +153,13 @@ impl<'m> AFGContextEngine<'m> {
             outgoing: HashMap::new(),
             semantic_points_by_input: HashMap::new(),
             semantic_points_by_result: HashMap::new(),
+            app_crate: String::new(),
         };
 
         engine
     }
 
-    pub fn init(&mut self, pag: &'m PointerAssignmentGraph<'m>) {
+    pub fn init(&mut self, pag: &PointerAssignmentGraph<'m>) {
         self.outgoing = Self::build_outgoing_edges(&pag.edges);
         let (callsites_by_block, _callee2callsites) = Self::build_calls(&pag.callsites);
         self.callsites_by_block = callsites_by_block;
@@ -162,6 +167,7 @@ impl<'m> AFGContextEngine<'m> {
         self.functions_by_name = pag.functions_by_name.clone();
         self.semantic_points = pag.semantic_points.clone();
         self.nodes = pag.nodes.clone();
+        self.app_crate = pag.app_crate.clone();
 
         self.build_semantic_point_index();
     }
@@ -245,7 +251,9 @@ impl<'m> AFGContextEngine<'m> {
 
         for (id, callsite) in callsites {
             let caller = callsite.caller.clone();
-            let block = callsite.block.clone();
+            // Normalize the block label (strip leading '%') so lookups keyed by
+            // CFG-normalized block names (from normal_reachable_blocks) match.
+            let block = util::normalize_block_label(&callsite.block);
             let callee = callsite.direct_callee.clone();
 
             callsites_by_block
@@ -284,7 +292,7 @@ impl<'m> AFGContextEngine<'m> {
         let ids: Vec<usize> = self
             .callsites_by_block
             .get(caller)
-            .and_then(|blocks| blocks.get(block))
+            .and_then(|blocks| blocks.get(&util::normalize_block_label(block)))
             .into_iter()
             .flatten()
             .copied()
@@ -760,25 +768,12 @@ impl<'m> AFGContextEngine<'m> {
     }
 
     fn should_propagate_execution_into(&self, callee: &str) -> bool {
-        /*
-         * Simplest prototype rule:
-         *
-         * only propagate into functions belonging to your application.
-         *
-         * Replace "llm_api_ac" with the crate/module prefix you derive
-         * from the LLVM module.
-         */
-        if callee.contains("_ZN10llm_api_ac") {
+        // Only propagate into functions belonging to the application, identified
+        // by the app-crate prefix derived from the module's `main` (e.g.
+        // "llm_ac_demo"). This replaces the earlier hardcoded crate name.
+        if !self.app_crate.is_empty() && callee.contains(&self.app_crate) {
             return true;
         }
-
-        /*
-         * Also allow directly matched semantic functions if needed.
-         *
-         * Usually you don't actually need to propagate into OpenAI
-         * internals, because the SemanticPoint is at the callsite in
-         * your application.
-         */
 
         false
     }
