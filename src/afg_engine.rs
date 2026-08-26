@@ -154,7 +154,7 @@ impl<'m> AFGContextEngine<'m> {
         engine
     }
 
-    pub fn init(&mut self, pag: &'m PointerAssignmentGraph<'m>) {
+    pub fn init(&mut self, pag: &PointerAssignmentGraph<'m>) {
         self.outgoing = Self::build_outgoing_edges(&pag.edges);
         let (callsites_by_block, _callee2callsites) = Self::build_calls(&pag.callsites);
         self.callsites_by_block = callsites_by_block;

@@ -4,7 +4,7 @@
 //! For a more thorough introduction to the crate and how to get started,
 //! see the [crate's README](https://github.com/cdisselkoen/llvm-ir-analysis/blob/main/README.md).
 
-mod afg_engine;
+pub mod afg_engine;
 mod call_graph;
 mod context;
 mod control_dep_graph;
@@ -15,8 +15,11 @@ mod pointer_assignment_graph;
 pub mod signature;
 pub mod util;
 
-use crate::afg_engine::AFGContextEngine;
+pub use crate::afg_engine::AFGContextEngine;
 pub use crate::call_graph::CallGraph;
+// Re-export the context types so consumers can read the `pub` context fields
+// exposed by the AFG engine (e.g. `node_contexts` values are `PAContextElem`s).
+pub use crate::context::{PAContext, PAContextElem};
 pub use crate::control_dep_graph::ControlDependenceGraph;
 pub use crate::control_flow_graph::{CFGNode, ControlFlowGraph};
 pub use crate::dominator_tree::{DominatorTree, PostDominatorTree};
@@ -115,10 +118,18 @@ impl<'m> ModuleAnalysis<'m> {
         })
     }
 
-    // pub fn afg_engine(&self, pag: &'m PointerAssignmentGraph) -> Ref<'_, AFGContextEngine<'m>> {
-    //     self.afg_engine
-    //         .get_or_insert_with(|| AFGContextEngine::new(&pag))
-    // }
+    /// Get the AFG engine for the `Module`: builds the PAG in the given mode,
+    /// runs principal/semantic-context propagation, and returns the engine.
+    /// Requires the context catalogs to have been set (see `set_context_catalogs`).
+    pub fn afg_engine(&self, mode: &str, k: Option<usize>) -> Ref<'_, AFGContextEngine<'m>> {
+        self.afg_engine.get_or_insert_with(move || {
+            let pag = self.pointer_assignment_graph(mode, k);
+            let mut engine = AFGContextEngine::new();
+            engine.init(&pag);
+            engine.run();
+            engine
+        })
+    }
 
     /// Get the `FunctionsByType` for the `Module`.
     pub fn functions_by_type(&self) -> Ref<FunctionsByType<'m>> {
@@ -234,12 +245,18 @@ impl<'m> CrossModuleAnalysis<'m> {
         })
     }
 
-    // pub fn afg_engine(&self, mode: &str, k: Option<usize>) -> Ref<'_, AFGContextEngine<'m>> {
-    //     self.afg_engine.get_or_insert_with(move || {
-    //         let pag = self.pointer_assignment_graph(mode, k);
-    //         AFGContextEngine::new(&pag)
-    //     })
-    // }
+    /// Get the AFG engine for the `Module`(s): builds the PAG in the given mode,
+    /// runs principal/semantic-context propagation, and returns the engine.
+    /// Requires the context catalogs to have been set (see `set_context_catalogs`).
+    pub fn afg_engine(&self, mode: &str, k: Option<usize>) -> Ref<'_, AFGContextEngine<'m>> {
+        self.afg_engine.get_or_insert_with(move || {
+            let pag = self.pointer_assignment_graph(mode, k);
+            let mut engine = AFGContextEngine::new();
+            engine.init(&pag);
+            engine.run();
+            engine
+        })
+    }
 
     /// Get the `FunctionsByType` for the `Module`(s).
     pub fn functions_by_type(&self) -> Ref<FunctionsByType<'m>> {
