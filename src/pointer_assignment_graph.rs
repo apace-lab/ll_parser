@@ -201,6 +201,18 @@ impl<'m> PANode<'m> {
     pub fn key(&self) -> String {
         return format!("{} (ctx::{:?})", self.kind.key(), self.context);
     }
+
+    /// The enclosing function (mangled name) of this node, if it has one.
+    pub fn function(&self) -> Option<&str> {
+        match &self.kind {
+            PANodeKind::SSAValue { function, .. } => function.as_deref(),
+            PANodeKind::AllocaObject { function, .. } => Some(function),
+            PANodeKind::FunctionReturn { function, .. } => Some(function),
+            PANodeKind::FunctionObject { function, .. } => Some(function),
+            PANodeKind::ReceiverObject { caller, .. } => Some(caller),
+            _ => None,
+        }
+    }
 }
 
 impl<'m> PANodeKind<'m> {
