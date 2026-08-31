@@ -1,4 +1,11 @@
-# use llvm-ir
+# ll-parser
+
+This is a static analysis framework to analyze Rust programs through LLVM IR, including:
+- context-insensitive/sensitive pointer analysis
+- AFG-related static taint analysis
+- 
+
+## use llvm-ir
 
 https://github.com/cdisselkoen/llvm-ir (as library)
 
