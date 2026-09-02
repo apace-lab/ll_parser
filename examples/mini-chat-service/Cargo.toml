@@ -1,5 +1,5 @@
 [package]
-name = "afg_dyn_demo"
+name = "mini_chat_service"
 version = "0.1.0"
 edition = "2021"
 

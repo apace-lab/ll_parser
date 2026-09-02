@@ -91,7 +91,7 @@ impl fmt::Display for SemanticPoint {
     }
 }
 
-pub struct AFGContextEngine<'m> {
+pub struct TaintAnalysis<'m> {
     callsites: BTreeMap<usize, PACallSite<'m>>,
     pub functions_by_name: BTreeMap<String, &'m llvm_ir::Function>,
     pub semantic_points: Vec<SemanticPoint>,
@@ -121,7 +121,7 @@ pub struct AFGContextEngine<'m> {
     pub app_crate: String,
 }
 
-impl<'m> AFGContextEngine<'m> {
+impl<'m> TaintAnalysis<'m> {
     // pub fn new(pag: &'m PointerAssignmentGraph<'m>) -> Self {
     //     let outgoing = Self::build_outgoing_edges(&pag.edges);
     //     let (callsites_by_block, _callee2callsites) = Self::build_calls(&pag.callsites);
@@ -189,7 +189,7 @@ impl<'m> AFGContextEngine<'m> {
         self.propagate_data_contexts(&mut worklist);
     }
 
-    ///////// preparing afg engine from pag /////////////
+    ///////// preparing taint analysis from pag /////////////
 
     fn build_semantic_point_index(&mut self) {
         for (point_index, point) in self.semantic_points.iter().enumerate() {
@@ -488,7 +488,7 @@ impl<'m> AFGContextEngine<'m> {
         return PAContext::Global;
     }
 
-    ///////////// logic of afg engine /////////////////
+    ///////////// logic of taint analysis /////////////////
 
     fn seed_authenticated_functions(&mut self) {
         let mut seeds = Vec::new();
@@ -1041,7 +1041,7 @@ impl<'m> AFGContextEngine<'m> {
     }
 
     pub fn print_result(&self) {
-        println!("\n========== AFG Context Analysis ==========");
+        println!("\n========== Static Taint Analysis ==========");
 
         let mut node_ids: Vec<PANodeId> = self.node_contexts.keys().copied().collect();
 
