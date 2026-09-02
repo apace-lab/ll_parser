@@ -132,8 +132,8 @@ fn main() -> Result<(), Box<dyn Error>> {
                         analysis.pointer_assignment_graph(mode, None);
                     pag.print_pointer_assignment_graph()?;
 
-                    // // run the AFG engine on the PAG
-                    // let afg = analysis.afg_engine(mode, None);
+                    // // run the taint analysis on the PAG
+                    // let afg = analysis.taint_analysis(mode, None);
                     // afg.print_leak_result(false, false);
                 } else {
                     eprintln!("Usage: cargo run -- input.ll --api=api.json --ac=ac.json");

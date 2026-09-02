@@ -4,7 +4,7 @@
 //! For a more thorough introduction to the crate and how to get started,
 //! see the [crate's README](https://github.com/cdisselkoen/llvm-ir-analysis/blob/main/README.md).
 
-pub mod afg_engine;
+pub mod taint_analysis;
 mod call_graph;
 mod context;
 mod control_dep_graph;
@@ -15,10 +15,10 @@ mod pointer_assignment_graph;
 pub mod signature;
 pub mod util;
 
-pub use crate::afg_engine::AFGContextEngine;
+pub use crate::taint_analysis::TaintAnalysis;
 pub use crate::call_graph::CallGraph;
 // Re-export the context types so consumers can read the `pub` context fields
-// exposed by the AFG engine (e.g. `node_contexts` values are `PAContextElem`s).
+// exposed by the taint analysis (e.g. `node_contexts` values are `PAContextElem`s).
 pub use crate::context::{PAContext, PAContextElem};
 pub use crate::control_dep_graph::ControlDependenceGraph;
 pub use crate::control_flow_graph::{CFGNode, ControlFlowGraph};
@@ -49,8 +49,8 @@ pub struct ModuleAnalysis<'m> {
     fn_analyses: HashMap<&'m str, FunctionAnalysis<'m>>,
     /// optional (llm, access-control) catalogs used to record context points
     context_catalogs: Option<(Vec<signature::Signature>, Vec<signature::Signature>)>,
-    /// optional AFG engine for the module, which can be used to detect potential leaks of sensitive information from LLM API calls to access-control sinks
-    afg_engine: SimpleCache<AFGContextEngine<'m>>,
+    /// optional taint analysis for the module, which can be used to detect potential leaks of sensitive information from LLM API calls to access-control sinks
+    taint_analysis: SimpleCache<TaintAnalysis<'m>>,
 }
 
 impl<'m> ModuleAnalysis<'m> {
@@ -70,7 +70,7 @@ impl<'m> ModuleAnalysis<'m> {
                 .map(|f| (f.name.as_str(), FunctionAnalysis::new(f)))
                 .collect(),
             context_catalogs: None,
-            afg_engine: SimpleCache::new(),
+            taint_analysis: SimpleCache::new(),
         }
     }
 
@@ -118,13 +118,13 @@ impl<'m> ModuleAnalysis<'m> {
         })
     }
 
-    /// Get the AFG engine for the `Module`: builds the PAG in the given mode,
+    /// Get the taint analysis for the `Module`: builds the PAG in the given mode,
     /// runs principal/semantic-context propagation, and returns the engine.
     /// Requires the context catalogs to have been set (see `set_context_catalogs`).
-    pub fn afg_engine(&self, mode: &str, k: Option<usize>) -> Ref<'_, AFGContextEngine<'m>> {
-        self.afg_engine.get_or_insert_with(move || {
+    pub fn taint_analysis(&self, mode: &str, k: Option<usize>) -> Ref<'_, TaintAnalysis<'m>> {
+        self.taint_analysis.get_or_insert_with(move || {
             let pag = self.pointer_assignment_graph(mode, k);
-            let mut engine = AFGContextEngine::new();
+            let mut engine = TaintAnalysis::new();
             engine.init(&pag);
             engine.run();
             engine
@@ -166,8 +166,8 @@ pub struct CrossModuleAnalysis<'m> {
     module_analyses: HashMap<&'m str, ModuleAnalysis<'m>>,
     /// optional (llm, access-control) catalogs used to record context points
     context_catalogs: Option<(Vec<signature::Signature>, Vec<signature::Signature>)>,
-    /// optional AFG engine for the module, which can be used to detect potential leaks of sensitive information from LLM API calls to access-control sinks
-    afg_engine: SimpleCache<AFGContextEngine<'m>>,
+    /// optional taint analysis for the module, which can be used to detect potential leaks of sensitive information from LLM API calls to access-control sinks
+    taint_analysis: SimpleCache<TaintAnalysis<'m>>,
 }
 
 impl<'m> CrossModuleAnalysis<'m> {
@@ -189,7 +189,7 @@ impl<'m> CrossModuleAnalysis<'m> {
             functions_by_type: SimpleCache::new(),
             module_analyses,
             context_catalogs: None,
-            afg_engine: SimpleCache::new(),
+            taint_analysis: SimpleCache::new(),
         }
     }
 
@@ -245,13 +245,13 @@ impl<'m> CrossModuleAnalysis<'m> {
         })
     }
 
-    /// Get the AFG engine for the `Module`(s): builds the PAG in the given mode,
+    /// Get the taint analysis for the `Module`(s): builds the PAG in the given mode,
     /// runs principal/semantic-context propagation, and returns the engine.
     /// Requires the context catalogs to have been set (see `set_context_catalogs`).
-    pub fn afg_engine(&self, mode: &str, k: Option<usize>) -> Ref<'_, AFGContextEngine<'m>> {
-        self.afg_engine.get_or_insert_with(move || {
+    pub fn taint_analysis(&self, mode: &str, k: Option<usize>) -> Ref<'_, TaintAnalysis<'m>> {
+        self.taint_analysis.get_or_insert_with(move || {
             let pag = self.pointer_assignment_graph(mode, k);
-            let mut engine = AFGContextEngine::new();
+            let mut engine = TaintAnalysis::new();
             engine.init(&pag);
             engine.run();
             engine

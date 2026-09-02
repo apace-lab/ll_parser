@@ -1,12 +1,12 @@
-use crate::afg_engine::SemanticPoint;
-use crate::afg_engine::SemanticPointKind;
+use crate::taint_analysis::SemanticPoint;
+use crate::taint_analysis::SemanticPointKind;
 use crate::call_graph::CallGraph;
 use crate::context::{
     PAConfig, PAContext, PAContextElem, PAContextMode, PAContextSelectPolicy, PAObjectContextKind,
 };
 use crate::signature::Signature;
 use crate::util;
-use crate::AFGContextEngine;
+use crate::TaintAnalysis;
 use crate::ControlFlowGraph;
 use crate::FunctionsByType;
 use core::panic;
@@ -507,7 +507,7 @@ pub struct PointerAssignmentGraph<'m> {
 
     /// for AFG, the engine to record functions
     pub semantic_points: Vec<SemanticPoint>,
-    pub afg_engine: Option<AFGContextEngine<'m>>,
+    pub taint_analysis: Option<TaintAnalysis<'m>>,
 }
 
 impl<'m> PointerAssignmentGraph<'m> {
@@ -572,7 +572,7 @@ impl<'m> PointerAssignmentGraph<'m> {
         };
 
         let mut engine = if config.policy == PAContextSelectPolicy::AFG {
-            Some(AFGContextEngine::new())
+            Some(TaintAnalysis::new())
         } else {
             None
         };
@@ -604,14 +604,14 @@ impl<'m> PointerAssignmentGraph<'m> {
             config: config,
             app_crate: String::new(),
             semantic_points: Vec::new(),
-            afg_engine: engine,
+            taint_analysis: engine,
         };
 
         if let Some(main_name) = pag.find_main_function_name() {
             println!("[PAG] potential main function: {}", main_name);
 
             // Derive the application crate for all policies (used by selective
-            // context, entry-point seeding, and the AFG engine's execution
+            // context, entry-point seeding, and the taint analysis's execution
             // propagation), not only under AppOnly.
             pag.app_crate = parse_app_crate(&main_name);
 
@@ -663,7 +663,7 @@ impl<'m> PointerAssignmentGraph<'m> {
 
         pag.print_statistics();
 
-        if let Some(mut engine) = pag.afg_engine.take() {
+        if let Some(mut engine) = pag.taint_analysis.take() {
             engine.init(&pag);
             engine.run();
             engine.print_result();
